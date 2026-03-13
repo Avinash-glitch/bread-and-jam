@@ -1,0 +1,917 @@
+{% extends "base.html" %}
+{% block content %}
+<p>
+  <a href="{{ url_for('projects.project_detail', project_id=project['id']) }}">Back to Project</a>
+</p>
+<h2>{{ project["title"] }} - Sketch Grid</h2>
+<p>Build a quick arrangement draft before recording real stems.</p>
+
+<style>
+  .editor-shell { border: 1px solid #e1e1e1; border-radius: 10px; padding: 12px; background: #fafafa; }
+  .editor-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .editor-controls label { margin-right: 4px; }
+  .editor-wave { border: 1px solid #ddd; border-radius: 8px; background: #fff; overflow-x: auto; padding: 6px; }
+  .editor-canvas { display: block; }
+  .editor-status { font-size: 12px; color: #555; min-height: 16px; }
+  .editor-tools button { min-width: 70px; }
+  .chip { display: inline-block; padding: 4px 8px; border-radius: 999px; background: #ececec; font-size: 12px; }
+  .clip-row-actions button { min-width: 62px; }
+</style>
+
+<section class="card">
+  <div class="row">
+    <label>BPM</label>
+    <input id="bpm-input" type="number" min="40" max="240" step="0.1" value="{{ bpm }}" />
+    <label>Steps</label>
+    <select id="steps-input">
+      {% for n in [16, 24, 32] %}
+        <option value="{{ n }}" {% if n == steps %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+    <button id="play-btn" type="button">Play</button>
+    <button id="stop-btn" type="button">Stop</button>
+    <button id="save-btn" type="button">Save Grid</button>
+    <span id="save-status"></span>
+  </div>
+  <div class="row">
+    <label>Seek</label>
+    <input id="seek-input" type="range" min="0" max="{{ steps - 1 }}" value="0" style="min-width: 360px;" />
+    <span id="seek-label">step 1 / {{ steps }}</span>
+  </div>
+</section>
+
+<section class="card">
+  <div id="grid-root"></div>
+</section>
+
+<section class="card">
+  <h3>Audio Clip Grid (Uploaded Clips)</h3>
+  <div class="row">
+    <label>Clip</label>
+    <select id="clip-select">
+      {% for c in available_clips %}
+        <option value="{{ c['version_id'] }}" data-label="{{ c['label'] }}" data-url="{{ c['url'] }}">{{ c['label'] }}</option>
+      {% endfor %}
+    </select>
+    <button id="add-clip-btn" type="button">Add Clip Lane</button>
+  </div>
+  <div id="clip-grid-root"></div>
+</section>
+
+<section class="card">
+  <h3>Clip Editor (Ableton-style)</h3>
+  <div class="editor-shell">
+    <div class="editor-controls">
+      <button id="editor-play" type="button">Play</button>
+      <button id="editor-pause" type="button">Pause</button>
+      <button id="editor-stop" type="button">Stop</button>
+      <span class="chip" id="editor-clip-label">No clip selected</span>
+      <label>Grid</label>
+      <select id="editor-grid">
+        <option value="4">1/4</option>
+        <option value="8">1/8</option>
+        <option value="16" selected>1/16</option>
+        <option value="32">1/32</option>
+      </select>
+      <label>Zoom</label>
+      <input id="editor-zoom" type="range" min="40" max="240" value="110" />
+      <label><input id="editor-snap" type="checkbox" checked /> Snap</label>
+      <label>Seek</label>
+      <input id="editor-seek" type="range" min="0" max="100" value="0" style="min-width: 220px;" />
+    </div>
+    <div class="editor-wave" style="margin-top: 10px;">
+      <canvas id="editor-canvas" class="editor-canvas" width="600" height="130"></canvas>
+    </div>
+    <div class="row editor-tools" style="margin-top: 10px;">
+      <button id="editor-split" type="button">Split</button>
+      <button id="editor-crop" type="button">Crop</button>
+      <button id="editor-delete" type="button">Delete</button>
+      <span id="editor-selection" class="chip">Selection: none</span>
+    </div>
+    <div id="editor-status" class="editor-status"></div>
+  </div>
+</section>
+
+<script>
+  (function () {
+    const gridRoot = document.getElementById("grid-root");
+    const bpmInput = document.getElementById("bpm-input");
+    const stepsInput = document.getElementById("steps-input");
+    const playBtn = document.getElementById("play-btn");
+    const stopBtn = document.getElementById("stop-btn");
+    const saveBtn = document.getElementById("save-btn");
+    const saveStatus = document.getElementById("save-status");
+    const seekInput = document.getElementById("seek-input");
+    const seekLabel = document.getElementById("seek-label");
+    const clipGridRoot = document.getElementById("clip-grid-root");
+    const clipSelect = document.getElementById("clip-select");
+    const addClipBtn = document.getElementById("add-clip-btn");
+    const editorPlay = document.getElementById("editor-play");
+    const editorPause = document.getElementById("editor-pause");
+    const editorStop = document.getElementById("editor-stop");
+    const editorGrid = document.getElementById("editor-grid");
+    const editorZoom = document.getElementById("editor-zoom");
+    const editorSnap = document.getElementById("editor-snap");
+    const editorSeek = document.getElementById("editor-seek");
+    const editorCanvas = document.getElementById("editor-canvas");
+    const editorLabel = document.getElementById("editor-clip-label");
+    const editorSplit = document.getElementById("editor-split");
+    const editorCrop = document.getElementById("editor-crop");
+    const editorDelete = document.getElementById("editor-delete");
+    const editorSelection = document.getElementById("editor-selection");
+    const editorStatus = document.getElementById("editor-status");
+
+    const state = {
+      bpm: Number(bpmInput.value || 120),
+      steps: Number(stepsInput.value || 16),
+      tracks: {{ grid_state|tojson }},
+      activeAudio: [],
+      playing: false,
+      stepIndex: 0,
+      timer: null,
+      ctx: null,
+    };
+
+    const editor = {
+      selectedClipIndex: null,
+      buffer: null,
+      duration: 0,
+      zoom: Number(editorZoom.value || 110),
+      gridDivision: Number(editorGrid.value || 16),
+      snap: editorSnap.checked,
+      playhead: 0,
+      selStart: null,
+      selEnd: null,
+      audio: null,
+      playing: false,
+      raf: null,
+      peaks: [],
+    };
+
+    function setEditorStatus(msg) {
+      editorStatus.textContent = msg || "";
+    }
+
+    function editorHasClip() {
+      return editor.selectedClipIndex !== null && editor.selectedClipIndex >= 0;
+    }
+
+    function getSelectedClip() {
+      if (!editorHasClip()) return null;
+      return state.tracks.clips[editor.selectedClipIndex] || null;
+    }
+
+    function clipEffectiveEnd(clip) {
+      if (!clip) return 0;
+      const end = Number(clip.trim_end || 0);
+      if (end && end > 0) return end;
+      return editor.duration || 0;
+    }
+
+    function gridStepSeconds() {
+      const bpm = Math.max(40, Math.min(240, Number(state.bpm || 120)));
+      const base = 60 / bpm;
+      const div = Math.max(4, Math.min(32, Number(editor.gridDivision || 16)));
+      return base / (div / 4);
+    }
+
+    function snapTime(t) {
+      if (!editor.snap) return t;
+      const step = gridStepSeconds();
+      if (step <= 0) return t;
+      return Math.round(t / step) * step;
+    }
+
+    function formatTime(t) {
+      if (!isFinite(t)) return "0.00s";
+      return t.toFixed(2) + "s";
+    }
+
+    function updateSelectionLabel() {
+      if (editor.selStart === null || editor.selEnd === null) {
+        editorSelection.textContent = "Selection: none";
+        return;
+      }
+      const a = Math.min(editor.selStart, editor.selEnd);
+      const b = Math.max(editor.selStart, editor.selEnd);
+      editorSelection.textContent = "Selection: " + formatTime(a) + " → " + formatTime(b);
+    }
+
+    function audioContext() {
+      if (!state.ctx) state.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      return state.ctx;
+    }
+
+    function stopEditorPlayback() {
+      if (editor.audio) {
+        try { editor.audio.pause(); } catch (e) {}
+      }
+      editor.playing = false;
+      if (editor.raf) cancelAnimationFrame(editor.raf);
+      editor.raf = null;
+    }
+
+    function updateEditorSeek() {
+      const max = Math.max(0, editor.duration || 0);
+      editorSeek.max = String(max);
+      editorSeek.value = String(Math.max(0, Math.min(max, editor.playhead || 0)));
+    }
+
+    function renderWaveform() {
+      const ctx = editorCanvas.getContext("2d");
+      const height = editorCanvas.height;
+      const width = editorCanvas.width;
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+
+      if (!editor.buffer || !editor.duration) {
+        ctx.fillStyle = "#999";
+        ctx.fillText("Select a clip to edit", 10, 20);
+        return;
+      }
+
+      const duration = editor.duration;
+      const step = gridStepSeconds();
+      if (step > 0) {
+        const majorEvery = Math.max(1, Math.round(editor.gridDivision / 4));
+        let idx = 0;
+        for (let t = 0; t <= duration + 0.0001; t = idx * step) {
+          const x = Math.floor((t / duration) * width);
+          const isMajor = idx % majorEvery === 0;
+          ctx.strokeStyle = isMajor ? "#d8d8d8" : "#ededed";
+          ctx.beginPath();
+          ctx.moveTo(x + 0.5, 0);
+          ctx.lineTo(x + 0.5, height);
+          ctx.stroke();
+          idx += 1;
+        }
+      }
+
+      const channel = editor.buffer.getChannelData(0);
+      const samplesPerPixel = Math.max(1, Math.floor(channel.length / width));
+      ctx.strokeStyle = "#2c7be5";
+      ctx.beginPath();
+      for (let x = 0; x < width; x++) {
+        let max = 0;
+        const start = x * samplesPerPixel;
+        const end = Math.min(channel.length, start + samplesPerPixel);
+        for (let i = start; i < end; i++) {
+          const val = Math.abs(channel[i]);
+          if (val > max) max = val;
+        }
+        const y = (1 - max) * (height / 2);
+        ctx.moveTo(x, y);
+        ctx.lineTo(x, height - y);
+      }
+      ctx.stroke();
+
+      if (editor.selStart !== null && editor.selEnd !== null) {
+        const a = Math.min(editor.selStart, editor.selEnd);
+        const b = Math.max(editor.selStart, editor.selEnd);
+        const x1 = (a / duration) * width;
+        const x2 = (b / duration) * width;
+        ctx.fillStyle = "rgba(255, 193, 7, 0.2)";
+        ctx.fillRect(x1, 0, x2 - x1, height);
+      }
+
+      const playX = (editor.playhead / duration) * width;
+      ctx.strokeStyle = "#ff7a18";
+      ctx.beginPath();
+      ctx.moveTo(playX + 0.5, 0);
+      ctx.lineTo(playX + 0.5, height);
+      ctx.stroke();
+    }
+
+    function refreshEditorCanvas() {
+      const duration = editor.duration || 0;
+      const zoom = Math.max(40, Math.min(240, Number(editor.zoom || 110)));
+      const width = Math.max(600, Math.min(8000, Math.floor(duration * zoom)));
+      editorCanvas.width = width;
+      renderWaveform();
+    }
+
+    async function loadClipForEditor(clipIndex) {
+      const clip = state.tracks.clips[clipIndex];
+      if (!clip) return;
+      setEditorStatus("Loading audio...");
+      editor.selectedClipIndex = clipIndex;
+      editorLabel.textContent = clip.label || "Clip";
+      editor.playhead = Math.max(0, Number(clip.trim_start || 0));
+      editor.selStart = null;
+      editor.selEnd = null;
+      updateSelectionLabel();
+      stopEditorPlayback();
+
+      const audio = new Audio(clip.url);
+      audio.preload = "auto";
+      audio.volume = Math.max(0, Math.min(1, Number(clip.volume || 0.8)));
+      audio.addEventListener("ended", () => {
+        stopEditorPlayback();
+        editor.playhead = Math.max(0, editor.playhead);
+        updateEditorSeek();
+        renderWaveform();
+      });
+      editor.audio = audio;
+
+      try {
+        const resp = await fetch(clip.url);
+        const buf = await resp.arrayBuffer();
+        const ctx = audioContext();
+        const audioBuffer = await ctx.decodeAudioData(buf.slice(0));
+        editor.buffer = audioBuffer;
+        editor.duration = audioBuffer.duration || 0;
+        updateEditorSeek();
+        refreshEditorCanvas();
+        setEditorStatus("Loaded.");
+      } catch (err) {
+        editor.buffer = null;
+        editor.duration = 0;
+        refreshEditorCanvas();
+        setEditorStatus("Failed to load audio.");
+      }
+    }
+
+    function updatePlayheadFromAudio() {
+      if (!editor.audio || !editor.playing) return;
+      editor.playhead = editor.audio.currentTime || editor.playhead;
+      updateEditorSeek();
+      renderWaveform();
+      const clip = getSelectedClip();
+      if (clip) {
+        const end = clipEffectiveEnd(clip);
+        if (end > 0 && editor.playhead >= end - 0.01) {
+          stopEditorPlayback();
+        }
+      }
+      editor.raf = requestAnimationFrame(updatePlayheadFromAudio);
+    }
+
+    function playEditor() {
+      const clip = getSelectedClip();
+      if (!clip || !editor.audio) return;
+      const start = Math.max(0, Number(clip.trim_start || 0));
+      const end = clipEffectiveEnd(clip);
+      let t = Math.max(start, Math.min(end || editor.duration, editor.playhead || start));
+      t = snapTime(t);
+      editor.playhead = t;
+      editor.audio.currentTime = t;
+      editor.audio.volume = Math.max(0, Math.min(1, Number(clip.volume || 0.8)));
+      editor.audio.play().catch(() => {});
+      editor.playing = true;
+      updatePlayheadFromAudio();
+    }
+
+    function pauseEditor() {
+      if (!editor.audio) return;
+      try { editor.audio.pause(); } catch (e) {}
+      editor.playing = false;
+      if (editor.raf) cancelAnimationFrame(editor.raf);
+      editor.raf = null;
+    }
+
+    function stopEditor() {
+      pauseEditor();
+      const clip = getSelectedClip();
+      editor.playhead = clip ? Math.max(0, Number(clip.trim_start || 0)) : 0;
+      updateEditorSeek();
+      renderWaveform();
+    }
+
+    function updateEditorSelectionFromPointer(x) {
+      if (!editor.duration) return 0;
+      const rect = editorCanvas.getBoundingClientRect();
+      const relX = Math.max(0, Math.min(rect.width, x - rect.left));
+      const time = (relX / rect.width) * editor.duration;
+      return snapTime(time);
+    }
+
+    let dragging = false;
+    let dragStart = 0;
+    editorCanvas.addEventListener("mousedown", (event) => {
+      if (!editor.duration) return;
+      dragging = true;
+      dragStart = updateEditorSelectionFromPointer(event.clientX);
+      editor.selStart = dragStart;
+      editor.selEnd = dragStart;
+      editor.playhead = dragStart;
+      updateSelectionLabel();
+      updateEditorSeek();
+      renderWaveform();
+    });
+
+    window.addEventListener("mousemove", (event) => {
+      if (!dragging || !editor.duration) return;
+      const t = updateEditorSelectionFromPointer(event.clientX);
+      editor.selEnd = t;
+      editor.playhead = t;
+      updateSelectionLabel();
+      updateEditorSeek();
+      renderWaveform();
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      if (editor.selStart !== null && editor.selEnd !== null) {
+        const delta = Math.abs(editor.selEnd - editor.selStart);
+        if (delta < 0.02) {
+          editor.selStart = null;
+          editor.selEnd = null;
+        }
+      }
+      updateSelectionLabel();
+      renderWaveform();
+    });
+
+    editorPlay.addEventListener("click", playEditor);
+    editorPause.addEventListener("click", pauseEditor);
+    editorStop.addEventListener("click", stopEditor);
+
+    editorGrid.addEventListener("change", () => {
+      editor.gridDivision = Number(editorGrid.value || 16);
+      renderWaveform();
+    });
+    editorZoom.addEventListener("input", () => {
+      editor.zoom = Number(editorZoom.value || 110);
+      refreshEditorCanvas();
+    });
+    editorSnap.addEventListener("change", () => {
+      editor.snap = editorSnap.checked;
+    });
+    editorSeek.addEventListener("input", () => {
+      editor.playhead = snapTime(Number(editorSeek.value || 0));
+      renderWaveform();
+    });
+
+    editorSplit.addEventListener("click", () => {
+      const clip = getSelectedClip();
+      if (!clip) return;
+      const start = Math.max(0, Number(clip.trim_start || 0));
+      const end = clipEffectiveEnd(clip);
+      let splitAt = editor.playhead;
+      if (editor.selStart !== null && editor.selEnd !== null) {
+        splitAt = Math.min(editor.selStart, editor.selEnd);
+      }
+      splitAt = snapTime(splitAt);
+      if (splitAt <= start + 0.02 || splitAt >= end - 0.02) {
+        setEditorStatus("Split point must be inside the clip range.");
+        return;
+      }
+      const baseLabel = clip.label || "Clip";
+      const left = {
+        ...clip,
+        label: baseLabel + " (A)",
+        trim_start: start,
+        trim_end: splitAt,
+      };
+      const right = {
+        ...clip,
+        label: baseLabel + " (B)",
+        trim_start: splitAt,
+        trim_end: end,
+      };
+      state.tracks.clips.splice(editor.selectedClipIndex, 1, left, right);
+      editor.selectedClipIndex = editor.selectedClipIndex + 1;
+      editor.selStart = null;
+      editor.selEnd = null;
+      updateSelectionLabel();
+      loadClipForEditor(editor.selectedClipIndex);
+      renderClipGrid();
+      setEditorStatus("Clip split.");
+    });
+
+    editorCrop.addEventListener("click", () => {
+      const clip = getSelectedClip();
+      if (!clip) return;
+      if (editor.selStart === null || editor.selEnd === null) {
+        setEditorStatus("Drag to select a region before cropping.");
+        return;
+      }
+      const a = Math.min(editor.selStart, editor.selEnd);
+      const b = Math.max(editor.selStart, editor.selEnd);
+      if (b - a < 0.02) {
+        setEditorStatus("Selection too small to crop.");
+        return;
+      }
+      const start = Math.max(0, Number(clip.trim_start || 0));
+      const end = clipEffectiveEnd(clip) || editor.duration;
+      clip.trim_start = Math.max(start, a);
+      clip.trim_end = Math.min(end, Math.max(0.02, b));
+      editor.playhead = clip.trim_start;
+      editor.selStart = clip.trim_start;
+      editor.selEnd = clip.trim_end;
+      updateEditorSeek();
+      updateSelectionLabel();
+      renderClipGrid();
+      renderWaveform();
+      setEditorStatus("Cropped to selection.");
+    });
+
+    editorDelete.addEventListener("click", () => {
+      const clip = getSelectedClip();
+      if (!clip) return;
+      stopEditorPlayback();
+      state.tracks.clips.splice(editor.selectedClipIndex, 1);
+      editor.selectedClipIndex = null;
+      editor.buffer = null;
+      editor.duration = 0;
+      editor.playhead = 0;
+      editor.selStart = null;
+      editor.selEnd = null;
+      editorLabel.textContent = "No clip selected";
+      updateEditorSeek();
+      renderClipGrid();
+      renderWaveform();
+      setEditorStatus("Clip deleted.");
+    });
+
+    function ensureTracksStepLength() {
+      const desired = state.steps;
+      state.tracks.tracks.forEach((t) => {
+        const arr = Array.isArray(t.steps) ? t.steps : [];
+        while (arr.length < desired) arr.push(0);
+        t.steps = arr.slice(0, desired).map((v) => (v ? 1 : 0));
+      });
+      const clips = Array.isArray(state.tracks.clips) ? state.tracks.clips : [];
+      state.tracks.clips = clips;
+      state.tracks.clips.forEach((c) => {
+        const arr = Array.isArray(c.steps) ? c.steps : [];
+        while (arr.length < desired) arr.push(0);
+        c.steps = arr.slice(0, desired).map((v) => (v ? 1 : 0));
+      });
+    }
+
+    function renderDrumGrid() {
+      ensureTracksStepLength();
+      seekInput.max = String(Math.max(0, state.steps - 1));
+      seekInput.value = String(state.stepIndex);
+      seekLabel.textContent = "step " + (state.stepIndex + 1) + " / " + state.steps;
+      gridRoot.innerHTML = "";
+      state.tracks.tracks.forEach((track, ti) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.style.marginBottom = "8px";
+
+        const label = document.createElement("strong");
+        label.textContent = track.name;
+        label.style.display = "inline-block";
+        label.style.width = "80px";
+        row.appendChild(label);
+
+        const nudgeLeft = document.createElement("button");
+        nudgeLeft.type = "button";
+        nudgeLeft.textContent = "<";
+        nudgeLeft.title = "Shift track one step left";
+        nudgeLeft.addEventListener("click", () => {
+          const first = track.steps.shift() || 0;
+          track.steps.push(first);
+          render();
+        });
+        row.appendChild(nudgeLeft);
+
+        const nudgeRight = document.createElement("button");
+        nudgeRight.type = "button";
+        nudgeRight.textContent = ">";
+        nudgeRight.title = "Shift track one step right";
+        nudgeRight.addEventListener("click", () => {
+          const last = track.steps.pop() || 0;
+          track.steps.unshift(last);
+          render();
+        });
+        row.appendChild(nudgeRight);
+
+        const vol = document.createElement("input");
+        vol.type = "range";
+        vol.min = "0";
+        vol.max = "1";
+        vol.step = "0.05";
+        vol.value = String(track.volume ?? 0.7);
+        vol.addEventListener("input", () => {
+          track.volume = Number(vol.value);
+        });
+        row.appendChild(vol);
+
+        for (let si = 0; si < state.steps; si++) {
+          const cell = document.createElement("button");
+          cell.type = "button";
+          cell.textContent = track.steps[si] ? "X" : ".";
+          cell.style.width = "24px";
+          cell.style.height = "24px";
+          cell.style.padding = "0";
+          cell.style.margin = "0 2px";
+          if (si === state.stepIndex && state.playing) {
+            cell.style.borderColor = "#ff7a18";
+          }
+          cell.addEventListener("click", () => {
+            track.steps[si] = track.steps[si] ? 0 : 1;
+            render();
+          });
+          row.appendChild(cell);
+        }
+        gridRoot.appendChild(row);
+      });
+    }
+
+    function renderClipGrid() {
+      clipGridRoot.innerHTML = "";
+      state.tracks.clips.forEach((clip, ci) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.style.marginBottom = "10px";
+
+        const label = document.createElement("strong");
+        label.textContent = clip.label || ("Clip " + (ci + 1));
+        label.style.display = "inline-block";
+        label.style.width = "190px";
+        row.appendChild(label);
+
+        const nudgeLeft = document.createElement("button");
+        nudgeLeft.type = "button";
+        nudgeLeft.textContent = "<";
+        nudgeLeft.title = "Shift clip left";
+        nudgeLeft.addEventListener("click", () => {
+          const first = clip.steps.shift() || 0;
+          clip.steps.push(first);
+          render();
+        });
+        row.appendChild(nudgeLeft);
+
+        const nudgeRight = document.createElement("button");
+        nudgeRight.type = "button";
+        nudgeRight.textContent = ">";
+        nudgeRight.title = "Shift clip right";
+        nudgeRight.addEventListener("click", () => {
+          const last = clip.steps.pop() || 0;
+          clip.steps.unshift(last);
+          render();
+        });
+        row.appendChild(nudgeRight);
+
+        const trimStart = document.createElement("input");
+        trimStart.type = "number";
+        trimStart.step = "0.01";
+        trimStart.min = "0";
+        trimStart.value = String(clip.trim_start || 0);
+        trimStart.title = "Trim start (seconds)";
+        trimStart.style.width = "82px";
+        trimStart.addEventListener("change", () => {
+          clip.trim_start = Math.max(0, Number(trimStart.value || 0));
+        });
+        row.appendChild(trimStart);
+
+        const trimEnd = document.createElement("input");
+        trimEnd.type = "number";
+        trimEnd.step = "0.01";
+        trimEnd.min = "0";
+        trimEnd.value = String(clip.trim_end || 0);
+        trimEnd.title = "Trim end (seconds, 0 = full)";
+        trimEnd.style.width = "82px";
+        trimEnd.addEventListener("change", () => {
+          clip.trim_end = Math.max(0, Number(trimEnd.value || 0));
+        });
+        row.appendChild(trimEnd);
+
+        const vol = document.createElement("input");
+        vol.type = "range";
+        vol.min = "0";
+        vol.max = "1";
+        vol.step = "0.05";
+        vol.value = String(clip.volume ?? 0.8);
+        vol.addEventListener("input", () => {
+          clip.volume = Number(vol.value);
+        });
+        row.appendChild(vol);
+
+        const previewBtn = document.createElement("button");
+        previewBtn.type = "button";
+        previewBtn.textContent = "Preview";
+        previewBtn.addEventListener("click", () => playClip(clip));
+        row.appendChild(previewBtn);
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.textContent = "Edit";
+        editBtn.addEventListener("click", () => loadClipForEditor(ci));
+        row.appendChild(editBtn);
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", () => {
+          state.tracks.clips.splice(ci, 1);
+          if (editor.selectedClipIndex === ci) {
+            editor.selectedClipIndex = null;
+            editor.buffer = null;
+            editor.duration = 0;
+            editorLabel.textContent = "No clip selected";
+            updateEditorSeek();
+            renderWaveform();
+          } else if (editor.selectedClipIndex !== null && ci < editor.selectedClipIndex) {
+            editor.selectedClipIndex -= 1;
+          }
+          render();
+        });
+        row.appendChild(removeBtn);
+
+        for (let si = 0; si < state.steps; si++) {
+          const cell = document.createElement("button");
+          cell.type = "button";
+          cell.textContent = clip.steps[si] ? "X" : ".";
+          cell.style.width = "24px";
+          cell.style.height = "24px";
+          cell.style.padding = "0";
+          cell.style.margin = "0 2px";
+          if (si === state.stepIndex && state.playing) {
+            cell.style.borderColor = "#ff7a18";
+          }
+          cell.addEventListener("click", () => {
+            clip.steps[si] = clip.steps[si] ? 0 : 1;
+            render();
+          });
+          row.appendChild(cell);
+        }
+
+        clipGridRoot.appendChild(row);
+      });
+    }
+
+    function render() {
+      renderDrumGrid();
+      renderClipGrid();
+    }
+
+    function playTrack(sound, volume) {
+      const ctx = audioContext();
+      const now = ctx.currentTime;
+      const gain = ctx.createGain();
+      gain.gain.value = Math.max(0, Math.min(1, volume || 0.7)) * 0.3;
+      gain.connect(ctx.destination);
+
+      if (sound === "kick") {
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(150, now);
+        osc.frequency.exponentialRampToValueAtTime(50, now + 0.12);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.8 * gain.gain.value + 0.001, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+        osc.connect(gain);
+        osc.start(now);
+        osc.stop(now + 0.15);
+        return;
+      }
+
+      if (sound === "snare" || sound === "hihat") {
+        const buffer = ctx.createBuffer(1, ctx.sampleRate * 0.08, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+        const noise = ctx.createBufferSource();
+        noise.buffer = buffer;
+        gain.gain.setValueAtTime(sound === "hihat" ? 0.08 : 0.15, now);
+        noise.connect(gain);
+        noise.start(now);
+        return;
+      }
+
+      const osc = ctx.createOscillator();
+      osc.type = sound === "bass" ? "triangle" : "sawtooth";
+      const freq = sound === "bass" ? 82.41 : 220.0;
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.15 + gain.gain.value, now + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+      osc.connect(gain);
+      osc.start(now);
+      osc.stop(now + 0.2);
+    }
+
+    function playClip(clip) {
+      if (!clip || !clip.url) return;
+      const audio = new Audio(clip.url);
+      const volume = Math.max(0, Math.min(1, Number(clip.volume || 0.8)));
+      const trimStart = Math.max(0, Number(clip.trim_start || 0));
+      const trimEnd = Math.max(0, Number(clip.trim_end || 0));
+      audio.volume = volume;
+      audio.preload = "auto";
+      audio.addEventListener("loadedmetadata", () => {
+        const start = Math.min(trimStart, Math.max(0, audio.duration - 0.02));
+        const end = trimEnd > 0 ? Math.min(trimEnd, audio.duration) : audio.duration;
+        const duration = Math.max(0.02, end - start);
+        audio.currentTime = start;
+        audio.play().catch(() => {});
+        const timerId = setTimeout(() => {
+          audio.pause();
+          audio.src = "";
+        }, Math.ceil(duration * 1000));
+        state.activeAudio.push({ audio: audio, timerId: timerId });
+      });
+    }
+
+    function stopAllClipAudio() {
+      state.activeAudio.forEach((entry) => {
+        clearTimeout(entry.timerId);
+        try { entry.audio.pause(); } catch (e) {}
+        entry.audio.src = "";
+      });
+      state.activeAudio = [];
+    }
+
+    function tick() {
+      if (!state.playing) return;
+      state.tracks.tracks.forEach((track) => {
+        if (track.steps[state.stepIndex]) {
+          playTrack(track.sound || "lead", Number(track.volume || 0.7));
+        }
+      });
+      state.tracks.clips.forEach((clip) => {
+        if (clip.steps[state.stepIndex]) {
+          playClip(clip);
+        }
+      });
+      render();
+      state.stepIndex = (state.stepIndex + 1) % state.steps;
+      const msPerStep = (60 / state.bpm) * 1000 / 4;
+      state.timer = setTimeout(tick, msPerStep);
+    }
+
+    playBtn.addEventListener("click", () => {
+      state.bpm = Math.max(40, Math.min(240, Number(bpmInput.value || 120)));
+      state.steps = Number(stepsInput.value || 16);
+      if (!state.playing) {
+        state.playing = true;
+        tick();
+      }
+    });
+
+    stopBtn.addEventListener("click", () => {
+      state.playing = false;
+      if (state.timer) clearTimeout(state.timer);
+      stopAllClipAudio();
+      state.stepIndex = 0;
+      render();
+    });
+
+    stepsInput.addEventListener("change", () => {
+      state.steps = Number(stepsInput.value || 16);
+      state.stepIndex = 0;
+      render();
+    });
+
+    bpmInput.addEventListener("change", () => {
+      state.bpm = Math.max(40, Math.min(240, Number(bpmInput.value || 120)));
+      renderWaveform();
+    });
+
+    seekInput.addEventListener("input", () => {
+      state.stepIndex = Number(seekInput.value || 0);
+      render();
+    });
+
+    saveBtn.addEventListener("click", async () => {
+      state.bpm = Math.max(40, Math.min(240, Number(bpmInput.value || 120)));
+      const payload = {
+        bpm: state.bpm,
+        steps: state.steps,
+        tracks: state.tracks.tracks,
+        clips: state.tracks.clips,
+      };
+      saveStatus.textContent = "Saving...";
+      try {
+        const resp = await fetch("{{ url_for('projects.save_project_grid', project_id=project['id']) }}", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        saveStatus.textContent = data.ok ? "Saved." : ("Error: " + (data.error || "unknown"));
+      } catch (err) {
+        saveStatus.textContent = "Save failed.";
+      }
+    });
+
+    addClipBtn.addEventListener("click", () => {
+      const opt = clipSelect.options[clipSelect.selectedIndex];
+      if (!opt) return;
+      const versionId = Number(opt.value || 0);
+      const label = opt.getAttribute("data-label") || "Clip";
+      const url = opt.getAttribute("data-url") || "";
+      if (!versionId || !url) return;
+      const steps = [];
+      for (let i = 0; i < state.steps; i++) steps.push(i === 0 ? 1 : 0);
+      state.tracks.clips.push({
+        version_id: versionId,
+        label: label,
+        url: url,
+        volume: 0.8,
+        trim_start: 0.0,
+        trim_end: 0.0,
+        steps: steps,
+      });
+      render();
+    });
+
+    render();
+  })();
+</script>
+{% endblock %}

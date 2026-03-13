@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="{{ url_for('social.dashboard') }}">Back to Dashboard</a></p>
+<h2>Rules Chat</h2>
+<p>Use this room to discuss platform policies, moderation, and community rules only.</p>
+
+<section>
+  <h3>Core Rules</h3>
+  <ul>
+    <li>Only upload content you own or are licensed to use.</li>
+    <li>No harassment, hate speech, or abusive behavior.</li>
+    <li>No spam, scams, or unrelated promotion.</li>
+    <li>Respect takedown/moderation decisions while under review.</li>
+  </ul>
+</section>
+
+<section>
+  <h3>Post Message</h3>
+  <form method="post" action="{{ url_for('social.post_rules_chat_message') }}">
+    <label>Message</label>
+    <textarea name="message" maxlength="1000" required></textarea>
+    <button type="submit">Post</button>
+  </form>
+</section>
+
+<section>
+  <h3>Discussion</h3>
+  {% if messages %}
+    {% for m in messages %}
+      <div class="card">
+        <strong>{{ m["username"] }}</strong>
+        <small>{{ m["created_at"] }}</small>
+        <p>{{ m["message"] }}</p>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No messages yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="{{ url_for('social.dashboard') }}">Back to Dashboard</a></p>
+<h2>{{ project["title"] }}</h2>
+<p>By {{ project["owner_name"] }}</p>
+<p>{{ project["description"] or '' }}</p>
+<p>Tempo: {{ "%.1f"|format(project["bpm"] or 0) }} BPM | Time Signature: {{ project["time_signature"] or "4/4" }} | Bars: {{ project["bars"] or "-" }}</p>
+{% if project["stem_file"] %}
+  <p>Initial Stem: <a href="{{ url_for('projects.uploaded_file', filename=project['stem_file']) }}">{{ project["stem_file"] }}</a></p>
+{% endif %}
+
+<section>
+  <h3>Add Branch</h3>
+  <form method="post" action="{{ url_for('projects.create_branch', project_id=project['id']) }}">
+    <label>Branch Name</label><input name="name" required />
+    <label>Parent Branch</label>
+    <select name="parent_branch_id">
+      <option value="">none (from main/root)</option>
+      {% for b in branches %}
+        <option value="{{ b['id'] }}">{{ b["name"] }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Create Branch</button>
+  </form>
+</section>
+
+<section>
+  <h3>Branches and Versions</h3>
+  {% for b in branches %}
+    <div class="card">
+      <strong>{{ b["name"] }}</strong> (creator: {{ b["creator_name"] }})
+      {% if b["parent_branch_id"] %}<small>parent #{{ b["parent_branch_id"] }}</small>{% endif %}
+      <form method="post" action="{{ url_for('projects.add_version', branch_id=b['id']) }}" enctype="multipart/form-data">
+        <label>Version Notes</label><input name="notes" placeholder="what changed" />
+        <label>Audio File (WAV, MP3, M4A, AAC, FLAC, OGG, OPUS, AIFF)</label><input type="file" name="audio" data-preview-target="version-preview-{{ b['id'] }}" required />
+        <audio id="version-preview-{{ b['id'] }}" controls style="display:none;"></audio>
+        <button type="submit">Record New Version</button>
+      </form>
+      <form method="post" action="{{ url_for('projects.hum_to_instrument_version', branch_id=b['id']) }}" enctype="multipart/form-data">
+        <label>Hum Notes</label><input name="notes" placeholder="brainstorm idea" />
+        <label>Instrument</label>
+        <select name="instrument">
+          <option value="sine">Sine Lead</option>
+          <option value="square">Square Lead</option>
+          <option value="saw">Saw Lead</option>
+        </select>
+        <label>Hum Audio (WAV only)</label><input type="file" name="hum_audio" data-preview-target="hum-preview-{{ b['id'] }}" required />
+        <audio id="hum-preview-{{ b['id'] }}" controls style="display:none;"></audio>
+        <button type="submit">Hum to Instrument</button>
+      </form>
+      {% if versions_by_branch[b["id"]] %}
+        <ul>
+        {% for v in versions_by_branch[b["id"]] %}
+          <li>
+            v{{ v["version_number"] }} - {{ v["notes"] or "No notes" }}
+            {% if v["uploader_name"] %}| by {{ v["uploader_name"] }}{% endif %}
+            {% if v["detected_bpm"] %}| detected {{ "%.1f"|format(v["detected_bpm"]) }} BPM{% endif %}
+            {% if v["file_path"] %}
+              (<a href="{{ url_for('projects.uploaded_file', filename=v['file_path']) }}">preview</a> |
+              <a href="{{ url_for('projects.request_download', version_id=v['id']) }}">request download</a> |
+              <a href="{{ url_for('projects.download_version', version_id=v['id']) }}">download</a>)
+            {% endif %}
+            {% if v["file_path"] %}
+              <div class="row" style="margin-top:6px; flex-wrap: wrap;">
+                <form method="post" action="{{ url_for('projects.add_version_to_artist', version_id=v['id'], artist='artist1') }}">
+                  <button type="submit">Add to artist1</button>
+                </form>
+                <form method="post" action="{{ url_for('projects.add_version_to_artist', version_id=v['id'], artist='artist2') }}">
+                  <button type="submit">Add to artist2</button>
+                </form>
+              </div>
+            {% endif %}
+          </li>
+        {% endfor %}
+        </ul>
+      {% else %}
+        <p>No versions yet.</p>
+      {% endif %}
+    </div>
+  {% endfor %}
+</section>
+{% endblock %}
