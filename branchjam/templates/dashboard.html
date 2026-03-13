@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Welcome, {{ user["username"] }}</h2>
+<p><a href="{{ url_for('auth.logout') }}">Logout</a></p>
+<p><a href="{{ url_for('social.rules_chat') }}">Open Rules Chat</a></p>
+
+<section>
+  <h3>Friends Feed (Recent Posts)</h3>
+  {% if recent_feed %}
+    {% for post in recent_feed %}
+      <div class="card">
+        <strong>{{ post["uploader_name"] or "Unknown" }}</strong>
+        <span style="font-size:12px;color:var(--text-muted);">posted in {{ post["project_title"] }}</span>
+        <div style="margin-top:6px;">
+          <span>v{{ post["version_number"] }}</span>
+          {% if post["notes"] %}<span style="font-size:12px;color:var(--text-muted);">| {{ post["notes"] }}</span>{% endif %}
+        </div>
+        {% if post["file_path"] %}
+          <audio controls preload="metadata" style="margin-top:8px; width: 100%;">
+            <source src="{{ url_for('projects.uploaded_file', filename=post['file_path']) }}">
+          </audio>
+        {% endif %}
+        <div class="row" style="margin-top:10px; flex-wrap: wrap;">
+          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='like') }}">
+            <button type="submit">Like</button>
+          </form>
+          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='forward') }}">
+            <button type="submit">Forward</button>
+          </form>
+          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='share') }}">
+            <button type="submit">Share</button>
+          </form>
+          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='collaborate') }}">
+            <button type="submit">Collaborate</button>
+          </form>
+          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='bid') }}">
+            <button type="submit">Bid</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No recent posts from friends.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h3>Send Friend Request</h3>
+  <form method="post" action="{{ url_for('social.send_friend_request') }}">
+    <label>Username</label><input name="username" required />
+    <button type="submit">Send Request</button>
+  </form>
+</section>
+
+<section>
+  <h3>Incoming Requests</h3>
+  {% if incoming %}
+    {% for req in incoming %}
+      <div class="row">
+        <span>{{ req["sender"] }}</span>
+        <form method="post" action="{{ url_for('social.respond_friend_request', request_id=req['id']) }}">
+          <input type="hidden" name="action" value="accepted"/>
+          <button type="submit">Accept</button>
+        </form>
+        <form method="post" action="{{ url_for('social.respond_friend_request', request_id=req['id']) }}">
+          <input type="hidden" name="action" value="rejected"/>
+          <button type="submit">Reject</button>
+        </form>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No pending requests.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h3>Friends</h3>
+  <p>
+  {% if friends %}
+    {{ friends | map(attribute='username') | join(', ') }}
+  {% else %}
+    No friends yet.
+  {% endif %}
+  </p>
+</section>
+
+<section>
+  <h3>Create Project + Upload Initial Stem</h3>
+  <form method="post" action="{{ url_for('projects.create_project') }}" enctype="multipart/form-data">
+    <label>Title</label><input name="title" required />
+    <label>BPM</label><input name="bpm" type="number" min="40" max="240" step="0.1" required />
+    <label>Time Signature</label><input name="time_signature" value="4/4" required />
+    <label>Bars</label><input name="bars" type="number" min="1" step="1" required />
+    <label>Description</label><textarea name="description"></textarea>
+    <label>Initial Stem (WAV, MP3, M4A, AAC, FLAC, OGG, OPUS, AIFF)</label><input type="file" name="stem" data-preview-target="project-stem-preview" required />
+    <audio id="project-stem-preview" controls style="display:none;"></audio>
+    <button type="submit">Create Project</button>
+  </form>
+</section>
+
+<section>
+  <h3>Download Consent Approvals</h3>
+  {% if pending_consents %}
+    {% for req in pending_consents %}
+      <div class="card">
+        <p><strong>{{ req["requester_name"] }}</strong> requested download for {{ req["project_title"] }} (version #{{ req["version_id"] }})</p>
+        <form method="post" action="{{ url_for('projects.decide_download_request', request_id=req['request_id']) }}">
+          <input type="hidden" name="action" value="approved" />
+          <button type="submit">Approve</button>
+        </form>
+        <form method="post" action="{{ url_for('projects.decide_download_request', request_id=req['request_id']) }}">
+          <input type="hidden" name="action" value="rejected" />
+          <button type="submit">Reject</button>
+        </form>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No pending download approvals.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h3>My Download Requests</h3>
+  {% if my_download_requests %}
+    {% for req in my_download_requests %}
+      <div class="card">
+        <p>{{ req["project_title"] }} (version #{{ req["version_id"] }}) - status: <strong>{{ req["status"] }}</strong></p>
+        {% if req["status"] == "approved" %}
+          <a href="{{ url_for('projects.download_version', version_id=req['version_id']) }}">Download now</a>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No download requests yet.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h3>Projects</h3>
+  {% if projects %}
+    {% for p in projects %}
+      <div class="card">
+        <strong>{{ p["title"] }}</strong> by {{ p["owner_name"] }}
+        <p>{{ p["description"] or '' }}</p>
+        <a href="{{ url_for('projects.project_detail', project_id=p['id']) }}">Open Project</a>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No projects yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
