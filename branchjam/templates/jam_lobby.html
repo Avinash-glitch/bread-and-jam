@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:8px;">
+  <h2>Jam Lobby</h2>
+  <span class="pill pill-teal">Live Rooms</span>
+</div>
+
+{% if active_rooms %}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;">
+    {% for room in active_rooms %}
+      <div class="card" id="lobby-room-{{ room['room'] }}">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px;">
+          <strong>{{ room["project_title"] }}</strong>
+          <div class="row" style="gap:6px;">
+            <span class="pill pill-amber">{{ room["peer_count"] }} peer{{ "s" if room["peer_count"] != 1 else "" }}</span>
+            {% if room["listener_count"] > 0 %}
+              <span class="pill pill-muted">{{ room["listener_count"] }} listening</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;">
+          <a href="{{ url_for('jam.jam_room', project_id=room['project_id']) }}" class="btn btn-sm btn-teal">Join as Peer</a>
+          <button class="btn btn-sm"
+                  onclick="listenIn('{{ room['room'] }}', {{ room['project_id'] }})">
+            Listen In
+          </button>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card" style="text-align:center;padding:40px;">
+    <p style="margin-bottom:12px;">No active jam rooms right now.</p>
+    <p>Open a project and click <strong>Live Jam</strong> to start one.</p>
+    <a href="{{ url_for('social.dashboard') }}" class="btn btn-sm" style="margin-top:12px;">Back to Dashboard</a>
+  </div>
+{% endif %}
+
+<script>
+  function listenIn(roomName, projectId) {
+    // Navigate to the jam page with a listener flag
+    window.location.href = '/projects/' + projectId + '/jam?mode=listener';
+  }
+
+  // Auto-refresh lobby every 10s
+  setTimeout(function () { window.location.reload(); }, 10000);
+</script>
+{% endblock %}

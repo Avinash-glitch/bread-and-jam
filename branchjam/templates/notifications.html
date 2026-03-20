@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin-bottom:20px;">Notifications</h2>
+
+{% if notifications %}
+  {% for n in notifications %}
+    <div class="card row" style="justify-content:space-between;margin-top:8px;{% if not n['read'] %}border-color:rgba(245,166,35,0.35);{% endif %}">
+      <div style="flex:1;">
+        <div class="row" style="gap:8px;">
+          <span class="pill {% if not n['read'] %}pill-amber{% else %}pill-muted{% endif %}">{{ n["type"] | replace("_", " ") | title }}</span>
+          {% if not n["read"] %}<span style="font-size:11px;color:var(--amber);">New</span>{% endif %}
+        </div>
+        {% if n["payload"] %}
+          <p style="margin-top:4px;font-size:12px;">{{ n["payload"] }}</p>
+        {% endif %}
+        <p style="font-size:11px;color:var(--muted);margin-top:4px;">{{ n["created_at"][:16] | replace("T", " ") }}</p>
+      </div>
+      {% if not n["read"] %}
+        <form method="post" action="{{ url_for('social.mark_notification_read', notif_id=n['id']) }}" style="margin-left:8px;">
+          <button type="submit" class="btn btn-sm">Mark Read</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="card" style="text-align:center;padding:40px;">
+    <p>No notifications yet.</p>
+  </div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:8px;">
+  <h2>Marketplace</h2>
+  <div class="row">
+    {% if user_role == "creator" %}
+      <a href="{{ url_for('marketplace.create_post') }}" class="btn btn-primary">+ New Post</a>
+    {% endif %}
+  </div>
+</div>
+
+{# Package Bid form — producers only #}
+{% if user_role == "producer" and posts %}
+  <details class="card" style="margin-bottom:20px;">
+    <summary style="cursor:pointer;font-weight:600;color:var(--amber);padding:4px 0;">Package Bid — bid on multiple tracks at once</summary>
+    <form method="post" action="{{ url_for('marketplace.package_bid') }}" style="margin-top:16px;display:flex;flex-direction:column;gap:12px;">
+      <div class="form-group">
+        <label>Select Tracks (hold Ctrl/Cmd to multi-select)</label>
+        <select name="version_ids[]" multiple style="min-height:120px;">
+          {% for p in posts %}
+            <optgroup label="{{ p['title'] }} — {{ p['project_title'] }}">
+            </optgroup>
+          {% endfor %}
+        </select>
+        <p style="font-size:11px;margin-top:4px;">Note: tracks must be in open posts to be biddable.</p>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group">
+          <label>Total Bid Amount ($)</label>
+          <input name="total_amount" type="number" min="0.01" step="0.01" placeholder="50.00" required />
+        </div>
+        <div class="form-group">
+          <label>Expires In (hours)</label>
+          <input name="expires_hours" type="number" min="1" max="168" value="24" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="align-self:flex-start;">Submit Package Bid</button>
+    </form>
+  </details>
+{% endif %}
+
+{# Post list #}
+{% if posts %}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;">
+    {% for p in posts %}
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px;">
+          <div>
+            <strong>{{ p["title"] }}</strong>
+            <br/>
+            <span style="font-size:12px;color:var(--muted);">by {{ p["creator_name"] }}</span>
+          </div>
+          <span class="pill pill-teal">{{ p["project_title"][:20] }}</span>
+        </div>
+        {% if p["description"] %}
+          <p style="margin-bottom:10px;font-size:13px;">{{ p["description"] }}</p>
+        {% endif %}
+        <a href="{{ url_for('marketplace.view_post', post_id=p['id']) }}" class="btn btn-sm btn-primary">View &amp; Bid</a>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="card" style="text-align:center;padding:40px;">
+    <p>No open marketplace posts yet.</p>
+    {% if user_role == "creator" %}
+      <a href="{{ url_for('marketplace.create_post') }}" class="btn btn-sm" style="margin-top:12px;">Create First Post</a>
+    {% endif %}
+  </div>
+{% endif %}
+{% endblock %}

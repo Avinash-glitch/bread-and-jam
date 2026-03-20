@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>{{ post["title"] }}</h2>
+<p>By {{ post["creator_name"] }}</p>
+<p>{{ post["description"] or '' }}</p>
+<p>Project: {{ post["project_title"] }}</p>
+<p><a href="{{ url_for('projects.project_detail', project_id=post['project_id']) }}">Go to Original Track</a></p>
+
+{% if user_role == "creator" %}
+  <p><a href="{{ url_for('projects.project_detail', project_id=post['project_id']) }}">Collaborate on this project</a></p>
+{% endif %}
+
+<section class="card">
+  <h3>Tracks in this Post</h3>
+  {% for t in tracks %}
+    <div class="row">
+      <span>{{ t["branch_name"] }} v{{ t["version_number"] }} - {{ t["notes"] or "No notes" }}</span>
+      <span>Price: ${{ "%.2f"|format(t["price"]) }}</span>
+      {% if t["file_path"] %}
+        <a href="{{ url_for('projects.uploaded_file', filename=t['file_path']) }}">Preview</a>
+      {% endif %}
+    </div>
+  {% endfor %}
+</section>
+
+{% if user_role == "producer" %}
+<section class="card">
+  <h3>Make Offer</h3>
+  <form method="post" action="{{ url_for('marketplace.make_offer', post_id=post['id']) }}">
+    {% for t in tracks %}
+      <div class="row">
+        <input type="checkbox" name="track_id" value="{{ t['id'] }}" data-price="{{ t['price'] }}" />
+        <span>{{ t["branch_name"] }} v{{ t["version_number"] }}</span>
+      </div>
+    {% endfor %}
+    <p>Reference price: <strong id="ref-price">$0.00</strong></p>
+    <label>Your Offer (total)</label><input name="total_amount" type="number" step="0.01" min="1" required />
+    <label>Expires (hours)</label><input name="expires_hours" type="number" min="1" max="168" value="24" />
+    <button type="submit">Submit Offer</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="card">
+  <h3>Offers</h3>
+  {% if offers %}
+    {% for o in offers %}
+      <div class="card">
+        <p><strong>{{ o["producer_name"] }}</strong> offered ${{ "%.2f"|format(o["total_amount"]) }} ({{ o["status"] }})</p>
+        <p>Expires: {{ o["expires_at"] }}</p>
+        {% if user_role == "creator" %}
+          <form method="post" action="{{ url_for('marketplace.decide_offer', offer_id=o['id']) }}">
+            <input type="hidden" name="decision" value="accepted" />
+            <button type="submit">Accept</button>
+          </form>
+          <form method="post" action="{{ url_for('marketplace.decide_offer', offer_id=o['id']) }}">
+            <input type="hidden" name="decision" value="rejected" />
+            <button type="submit">Reject</button>
+          </form>
+          <form method="post" action="{{ url_for('marketplace.decide_offer', offer_id=o['id']) }}">
+            <input type="hidden" name="decision" value="countered" />
+            <label>Counter</label><input name="counter_amount" type="number" step="0.01" min="1" required />
+            <button type="submit">Counter</button>
+          </form>
+        {% endif %}
+
+        {% if user_role == "producer" and o["status"] == "countered" %}
+          <form method="post" action="{{ url_for('marketplace.accept_counter', offer_id=o['id']) }}">
+            <button type="submit">Accept Counter</button>
+          </form>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No offers yet.</p>
+  {% endif %}
+</section>
+
+<p><a href="{{ url_for('marketplace.marketplace_index') }}">Back to Marketplace</a></p>
+
+<script>
+  (function () {
+    const ref = document.getElementById("ref-price");
+    if (!ref) return;
+    const boxes = document.querySelectorAll("input[name='track_id']");
+    function update() {
+      let sum = 0;
+      boxes.forEach((b) => {
+        if (b.checked) sum += Number(b.getAttribute("data-price") || 0);
+      });
+      ref.textContent = "$" + sum.toFixed(2);
+    }
+    boxes.forEach((b) => b.addEventListener("change", update));
+    update();
+  })();
+</script>
+{% endblock %}

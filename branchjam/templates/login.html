@@ -1,10 +1,27 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Login</h2>
-<form method="post">
-  <label>Username</label><input name="username" required />
-  <label>Password</label><input name="password" type="password" required />
-  <button type="submit">Login</button>
-</form>
-<p>No account? <a href="{{ url_for('auth.register') }}">Register</a></p>
+<div style="max-width:400px;margin:40px auto;">
+  <div style="text-align:center;margin-bottom:32px;">
+    <h1 style="font-size:56px;color:var(--amber);">Bread &amp; Jam</h1>
+    <p style="margin-top:4px;">Sign in to your account</p>
+  </div>
+
+  <div class="card">
+    <form method="post" style="display:flex;flex-direction:column;gap:16px;">
+      <div class="form-group">
+        <label>Username</label>
+        <input name="username" required autocomplete="username" placeholder="your_username" />
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input name="password" type="password" required autocomplete="current-password" placeholder="••••••••" />
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;">Sign In</button>
+    </form>
+  </div>
+
+  <p style="text-align:center;margin-top:16px;font-size:13px;">
+    No account? <a href="{{ url_for('auth.register') }}">Create one</a>
+  </p>
+</div>
 {% endblock %}

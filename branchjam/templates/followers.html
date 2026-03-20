@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin-bottom:20px;">My Followers</h2>
+{% if followers %}
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    {% for u in followers %}
+      <div class="card row" style="justify-content:space-between;">
+        <a href="{{ url_for('auth.view_profile', user_id=u['id']) }}" style="font-weight:500;">{{ u["username"] }}</a>
+        <form method="post" action="{{ url_for('social.follow_user', user_id=u['id']) }}">
+          <button type="submit" class="btn btn-sm btn-teal">Follow Back</button>
+        </form>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <p>No followers yet.</p>
+{% endif %}
+{% endblock %}

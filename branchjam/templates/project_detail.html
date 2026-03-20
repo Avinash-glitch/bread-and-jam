@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <p><a href="{{ url_for('social.dashboard') }}">Back to Dashboard</a></p>
-<h2>{{ project["title"] }}</h2>
+<h2>{{ project["title"] }} <a href="{{ url_for('jam.jam_room', project_id=project['id']) }}" style="font-size:15px;font-weight:normal;margin-left:12px;">🎸 Live Jam</a></h2>
 <p>By {{ project["owner_name"] }}</p>
 <p>{{ project["description"] or '' }}</p>
 <p>Tempo: {{ "%.1f"|format(project["bpm"] or 0) }} BPM | Time Signature: {{ project["time_signature"] or "4/4" }} | Bars: {{ project["bars"] or "-" }}</p>

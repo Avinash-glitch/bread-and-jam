@@ -7,10 +7,13 @@ from flask import Blueprint, current_app, flash, jsonify, redirect, render_templ
 
 from .audio_analysis import estimate_bpm, hum_to_instrument_wav, trim_wav_inplace, waveform_svg
 from .db import get_db
-from .utils import login_required, now_iso, save_upload
+from .utils import insert_notification, login_required, now_iso, save_upload
 
 
 bp = Blueprint("projects", __name__)
+
+# Module-level set tracking (user_id, project_id) for listen deduplication
+_listened: set = set()
 
 
 def _is_wav_filename(filename):
@@ -75,6 +78,21 @@ def create_project():
         flash("Bars must be greater than 0.")
         return redirect(url_for("social.dashboard"))
 
+    # New optional fields
+    genre = request.form.get("genre", "").strip() or None
+    asking_price_raw = request.form.get("asking_price", "0").strip()
+    collab_open_raw = request.form.get("collab_open", "0")
+    max_collaborators_raw = request.form.get("max_collaborators", "4").strip()
+    try:
+        asking_price = max(0.0, float(asking_price_raw))
+    except ValueError:
+        asking_price = 0.0
+    collab_open = 1 if collab_open_raw in ("1", "on", "true", "yes") else 0
+    try:
+        max_collaborators = max(1, min(20, int(max_collaborators_raw)))
+    except ValueError:
+        max_collaborators = 4
+
     stem = save_upload(request.files.get("stem"))
     if request.files.get("stem") and not stem:
         flash("Unsupported file format.")
@@ -108,10 +126,12 @@ def create_project():
     db = get_db()
     cur = db.execute(
         """
-        INSERT INTO projects (owner_id, title, description, stem_file, bpm, time_signature, bars, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO projects (owner_id, title, description, stem_file, bpm, time_signature, bars,
+                              genre, asking_price, collab_open, max_collaborators, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (session["user_id"], title, description, stem, project_bpm, time_signature, bars, now_iso()),
+        (session["user_id"], title, description, stem, project_bpm, time_signature, bars,
+         genre, asking_price, collab_open, max_collaborators, now_iso()),
     )
     project_id = cur.lastrowid
 
@@ -868,3 +888,121 @@ def decide_download_request(request_id):
 @login_required
 def uploaded_file(filename):
     return send_from_directory(current_app.config["UPLOAD_DIR"], filename, as_attachment=False)
+
+
+@bp.route("/projects/<int:project_id>/listen", methods=["POST"])
+@login_required
+def increment_listen(project_id):
+    key = (session["user_id"], project_id)
+    if key not in _listened:
+        _listened.add(key)
+        db = get_db()
+        db.execute("UPDATE projects SET listens = COALESCE(listens, 0) + 1 WHERE id = ?", (project_id,))
+        db.commit()
+    return jsonify({"ok": True})
+
+
+@bp.route("/projects/<int:project_id>/collab-request", methods=["POST"])
+@login_required
+def request_collab(project_id):
+    db = get_db()
+    project = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not project:
+        return jsonify({"ok": False, "error": "Project not found"}), 404
+    if not project["collab_open"]:
+        flash("This project is not open for collaboration.")
+        return redirect(url_for("projects.project_detail", project_id=project_id))
+
+    message = request.form.get("message", "").strip() or None
+
+    # Check for existing pending request
+    existing = db.execute(
+        "SELECT id FROM collab_requests WHERE requester_id = ? AND project_id = ? AND status = 'pending'",
+        (session["user_id"], project_id),
+    ).fetchone()
+    if existing:
+        flash("You already have a pending collab request for this project.")
+        return redirect(request.referrer or url_for("projects.project_detail", project_id=project_id))
+
+    db.execute(
+        "INSERT INTO collab_requests (requester_id, project_id, message, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+        (session["user_id"], project_id, message, now_iso()),
+    )
+    db.commit()
+
+    # Notify the project owner
+    insert_notification(db, project["owner_id"], "collab_request", {
+        "requester_id": session["user_id"],
+        "project_id": project_id,
+        "project_title": project["title"],
+    })
+    db.commit()
+
+    flash("Collab request sent.")
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"ok": True})
+    return redirect(request.referrer or url_for("projects.project_detail", project_id=project_id))
+
+
+@bp.route("/collab-requests/<int:req_id>/accept", methods=["POST"])
+@login_required
+def accept_collab(req_id):
+    db = get_db()
+    req = db.execute("SELECT * FROM collab_requests WHERE id = ?", (req_id,)).fetchone()
+    if not req:
+        flash("Collab request not found.")
+        return redirect(url_for("social.dashboard"))
+
+    project = db.execute("SELECT * FROM projects WHERE id = ?", (req["project_id"],)).fetchone()
+    if not project or project["owner_id"] != session["user_id"]:
+        flash("Not authorized.")
+        return redirect(url_for("social.dashboard"))
+
+    # Check max_collaborators
+    accepted_count = db.execute(
+        "SELECT COUNT(*) AS cnt FROM collab_requests WHERE project_id = ? AND status = 'accepted'",
+        (req["project_id"],),
+    ).fetchone()["cnt"]
+    max_collabs = project["max_collaborators"] or 4
+    if accepted_count >= max_collabs:
+        flash("Maximum collaborators reached for this project.")
+        return redirect(url_for("social.dashboard"))
+
+    db.execute("UPDATE collab_requests SET status = 'accepted' WHERE id = ?", (req_id,))
+    db.commit()
+
+    insert_notification(db, req["requester_id"], "collab_accepted", {
+        "project_id": req["project_id"],
+        "project_title": project["title"],
+    })
+    db.commit()
+
+    flash("Collab request accepted.")
+    return redirect(url_for("social.dashboard"))
+
+
+@bp.route("/collab-requests/<int:req_id>/reject", methods=["POST"])
+@login_required
+def reject_collab(req_id):
+    db = get_db()
+    req = db.execute("SELECT * FROM collab_requests WHERE id = ?", (req_id,)).fetchone()
+    if not req:
+        flash("Collab request not found.")
+        return redirect(url_for("social.dashboard"))
+
+    project = db.execute("SELECT * FROM projects WHERE id = ?", (req["project_id"],)).fetchone()
+    if not project or project["owner_id"] != session["user_id"]:
+        flash("Not authorized.")
+        return redirect(url_for("social.dashboard"))
+
+    db.execute("UPDATE collab_requests SET status = 'rejected' WHERE id = ?", (req_id,))
+    db.commit()
+
+    insert_notification(db, req["requester_id"], "collab_rejected", {
+        "project_id": req["project_id"],
+        "project_title": project["title"],
+    })
+    db.commit()
+
+    flash("Collab request rejected.")
+    return redirect(url_for("social.dashboard"))

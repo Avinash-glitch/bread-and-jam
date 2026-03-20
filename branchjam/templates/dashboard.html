@@ -1,117 +1,252 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Welcome, {{ user["username"] }}</h2>
-<p><a href="{{ url_for('auth.logout') }}">Logout</a></p>
-<p><a href="{{ url_for('social.rules_chat') }}">Open Rules Chat</a></p>
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:24px;">
+  <h2>Welcome, {{ user["username"] }}</h2>
+  <div class="row">
+    <span class="pill pill-muted">{{ user["role"] | title }}</span>
+    <a href="{{ url_for('auth.edit_profile') }}" class="btn btn-sm">Edit Profile</a>
+    <a href="{{ url_for('social.rules_chat') }}" class="btn btn-sm">Rules Chat</a>
+  </div>
+</div>
+
+{# ═══════════════════════ CREATOR SECTION ═══════════════════════ #}
+{% if session.get('role') == 'creator' %}
 
 <section>
-  <h3>Friends Feed (Recent Posts)</h3>
-  {% if recent_feed %}
-    {% for post in recent_feed %}
-      <div class="card">
-        <strong>{{ post["uploader_name"] or "Unknown" }}</strong>
-        <span style="font-size:12px;color:var(--text-muted);">posted in {{ post["project_title"] }}</span>
-        <div style="margin-top:6px;">
-          <span>v{{ post["version_number"] }}</span>
-          {% if post["notes"] %}<span style="font-size:12px;color:var(--text-muted);">| {{ post["notes"] }}</span>{% endif %}
-        </div>
-        {% if post["file_path"] %}
-          <audio controls preload="metadata" style="margin-top:8px; width: 100%;">
-            <source src="{{ url_for('projects.uploaded_file', filename=post['file_path']) }}">
-          </audio>
-        {% endif %}
-        <div class="row" style="margin-top:10px; flex-wrap: wrap;">
-          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='like') }}">
-            <button type="submit">Like</button>
-          </form>
-          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='forward') }}">
-            <button type="submit">Forward</button>
-          </form>
-          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='share') }}">
-            <button type="submit">Share</button>
-          </form>
-          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='collaborate') }}">
-            <button type="submit">Collaborate</button>
-          </form>
-          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='bid') }}">
-            <button type="submit">Bid</button>
-          </form>
+  <h4>Your Stats</h4>
+  <div class="stats-row">
+    <div class="stat-card">
+      <span class="stat-value">{{ creator_stats.get('samples_released', 0) }}</span>
+      <span class="stat-label">Samples Released</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value">{{ creator_stats.get('collabs_given', 0) }}</span>
+      <span class="stat-label">Collabs Given</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value mono">${{ "%.2f"|format(creator_stats.get('money_earned', 0)) }}</span>
+      <span class="stat-label">Money Earned</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value">{{ creator_stats.get('follower_count', 0) }}</span>
+      <span class="stat-label">Followers</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h4>Pending Collab Requests</h4>
+  {% if collab_requests_for_me %}
+    {% for cr in collab_requests_for_me %}
+      <div class="card" style="margin-top:8px;">
+        <div class="row" style="justify-content:space-between;">
+          <div>
+            <strong>{{ cr["requester_name"] }}</strong>
+            <span style="color:var(--muted);font-size:13px;"> wants to collab on </span>
+            <strong>{{ cr["project_title"] }}</strong>
+            {% if cr["message"] %}<p style="margin-top:4px;">{{ cr["message"] }}</p>{% endif %}
+          </div>
+          <div class="row">
+            <form method="post" action="{{ url_for('projects.accept_collab', req_id=cr['id']) }}">
+              <button type="submit" class="btn-sm btn-teal btn">Accept</button>
+            </form>
+            <form method="post" action="{{ url_for('projects.reject_collab', req_id=cr['id']) }}">
+              <button type="submit" class="btn-sm btn-danger btn">Reject</button>
+            </form>
+          </div>
         </div>
       </div>
     {% endfor %}
   {% else %}
-    <p>No recent posts from friends.</p>
+    <p>No pending collab requests.</p>
   {% endif %}
 </section>
 
 <section>
-  <h3>Send Friend Request</h3>
-  <form method="post" action="{{ url_for('social.send_friend_request') }}">
-    <label>Username</label><input name="username" required />
-    <button type="submit">Send Request</button>
-  </form>
+  <h4>Create Project</h4>
+  <div class="card">
+    <form method="post" action="{{ url_for('projects.create_project') }}" enctype="multipart/form-data">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
+        <div class="form-group">
+          <label>Title *</label>
+          <input name="title" required placeholder="My Track" />
+        </div>
+        <div class="form-group">
+          <label>BPM *</label>
+          <input name="bpm" type="number" min="40" max="240" step="0.1" required placeholder="120" />
+        </div>
+        <div class="form-group">
+          <label>Time Signature</label>
+          <input name="time_signature" value="4/4" />
+        </div>
+        <div class="form-group">
+          <label>Bars *</label>
+          <input name="bars" type="number" min="1" step="1" required placeholder="8" />
+        </div>
+        <div class="form-group">
+          <label>Genre</label>
+          <input name="genre" placeholder="Hip-Hop, Jazz, etc." />
+        </div>
+        <div class="form-group">
+          <label>Asking Price ($)</label>
+          <input name="asking_price" type="number" min="0" step="0.01" value="0" />
+        </div>
+        <div class="form-group">
+          <label>Max Collaborators</label>
+          <input name="max_collaborators" type="number" min="1" max="20" value="4" />
+        </div>
+        <div class="form-group" style="display:flex;align-items:center;gap:8px;padding-top:20px;">
+          <input name="collab_open" type="checkbox" value="1" id="collab-open-chk" style="width:auto;min-width:unset;" />
+          <label for="collab-open-chk" style="text-transform:none;font-size:14px;">Open for collaboration</label>
+        </div>
+      </div>
+      <div class="form-group" style="margin-top:8px;">
+        <label>Description</label>
+        <textarea name="description" placeholder="Describe your project..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Initial Stem (WAV, MP3, M4A, AAC, FLAC, OGG, OPUS, AIFF) *</label>
+        <input type="file" name="stem" data-preview-target="project-stem-preview" required />
+        <audio id="project-stem-preview" controls style="display:none;margin-top:6px;width:100%;"></audio>
+      </div>
+      <button type="submit" class="btn-primary btn">Create Project</button>
+    </form>
+  </div>
+</section>
+
+{# ═══════════════════════ PRODUCER SECTION ═══════════════════════ #}
+{% elif session.get('role') == 'producer' %}
+
+<section>
+  <h4>Your Stats</h4>
+  <div class="stats-row">
+    <div class="stat-card">
+      <span class="stat-value">{{ producer_stats.get('samples_bought', 0) }}</span>
+      <span class="stat-label">Samples Bought</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value mono">${{ "%.2f"|format(producer_stats.get('money_spent', 0)) }}</span>
+      <span class="stat-label">Money Spent</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value">{{ producer_stats.get('following_count', 0) }}</span>
+      <span class="stat-label">Following</span>
+    </div>
+  </div>
 </section>
 
 <section>
-  <h3>Incoming Requests</h3>
+  <h4>Following</h4>
+  {% if following_list %}
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;">
+      {% for u in following_list %}
+        <div class="card row" style="padding:10px 14px;gap:10px;">
+          <a href="{{ url_for('auth.view_profile', user_id=u['id']) }}">{{ u["username"] }}</a>
+          <form method="post" action="{{ url_for('social.unfollow_user', user_id=u['id']) }}">
+            <button type="submit" class="btn btn-sm btn-danger">Unfollow</button>
+          </form>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p>You are not following anyone yet. <a href="{{ url_for('social.project_feed') }}">Discover creators</a>.</p>
+  {% endif %}
+</section>
+
+{% endif %}
+
+{# ═══════════════════════ SHARED SECTIONS ═══════════════════════ #}
+
+<section>
+  <h4>Payment History</h4>
+  {% if my_transactions %}
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            {% if session.get('role') == 'creator' %}<th>Payer</th>{% else %}<th>Payee</th>{% endif %}
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in my_transactions %}
+            <tr>
+              <td class="mono" style="font-size:12px;">{{ t["created_at"][:10] }}</td>
+              <td>
+                {% if session.get('role') == 'creator' %}
+                  {{ t["payer_name"] }}
+                {% else %}
+                  {{ t["payee_name"] }}
+                {% endif %}
+              </td>
+              <td class="mono" style="color:var(--teal);">${{ "%.2f"|format(t["amount"]) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p>No transactions yet.</p>
+  {% endif %}
+</section>
+
+<section>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+    <h4>Friends</h4>
+    <form class="inline" method="post" action="{{ url_for('social.send_friend_request') }}">
+      <div class="form-group">
+        <input name="username" placeholder="Username" style="min-width:160px;" />
+      </div>
+      <button type="submit" class="btn btn-sm">Send Request</button>
+    </form>
+  </div>
   {% if incoming %}
+    <h4 style="margin-bottom:6px;">Incoming Requests</h4>
     {% for req in incoming %}
-      <div class="row">
+      <div class="card row" style="justify-content:space-between;margin-top:6px;">
         <span>{{ req["sender"] }}</span>
-        <form method="post" action="{{ url_for('social.respond_friend_request', request_id=req['id']) }}">
-          <input type="hidden" name="action" value="accepted"/>
-          <button type="submit">Accept</button>
-        </form>
-        <form method="post" action="{{ url_for('social.respond_friend_request', request_id=req['id']) }}">
-          <input type="hidden" name="action" value="rejected"/>
-          <button type="submit">Reject</button>
-        </form>
+        <div class="row">
+          <form method="post" action="{{ url_for('social.respond_friend_request', request_id=req['id']) }}">
+            <input type="hidden" name="action" value="accepted" />
+            <button type="submit" class="btn btn-sm btn-teal">Accept</button>
+          </form>
+          <form method="post" action="{{ url_for('social.respond_friend_request', request_id=req['id']) }}">
+            <input type="hidden" name="action" value="rejected" />
+            <button type="submit" class="btn btn-sm btn-danger">Reject</button>
+          </form>
+        </div>
       </div>
     {% endfor %}
-  {% else %}
-    <p>No pending requests.</p>
   {% endif %}
-</section>
-
-<section>
-  <h3>Friends</h3>
-  <p>
-  {% if friends %}
-    {{ friends | map(attribute='username') | join(', ') }}
-  {% else %}
-    No friends yet.
-  {% endif %}
+  <p style="margin-top:8px;">
+    {% if friends %}
+      {{ friends | map(attribute='username') | join(' · ') }}
+    {% else %}
+      No friends yet.
+    {% endif %}
   </p>
 </section>
 
 <section>
-  <h3>Create Project + Upload Initial Stem</h3>
-  <form method="post" action="{{ url_for('projects.create_project') }}" enctype="multipart/form-data">
-    <label>Title</label><input name="title" required />
-    <label>BPM</label><input name="bpm" type="number" min="40" max="240" step="0.1" required />
-    <label>Time Signature</label><input name="time_signature" value="4/4" required />
-    <label>Bars</label><input name="bars" type="number" min="1" step="1" required />
-    <label>Description</label><textarea name="description"></textarea>
-    <label>Initial Stem (WAV, MP3, M4A, AAC, FLAC, OGG, OPUS, AIFF)</label><input type="file" name="stem" data-preview-target="project-stem-preview" required />
-    <audio id="project-stem-preview" controls style="display:none;"></audio>
-    <button type="submit">Create Project</button>
-  </form>
-</section>
-
-<section>
-  <h3>Download Consent Approvals</h3>
+  <h4>Download Consent Approvals</h4>
   {% if pending_consents %}
     {% for req in pending_consents %}
-      <div class="card">
-        <p><strong>{{ req["requester_name"] }}</strong> requested download for {{ req["project_title"] }} (version #{{ req["version_id"] }})</p>
-        <form method="post" action="{{ url_for('projects.decide_download_request', request_id=req['request_id']) }}">
-          <input type="hidden" name="action" value="approved" />
-          <button type="submit">Approve</button>
-        </form>
-        <form method="post" action="{{ url_for('projects.decide_download_request', request_id=req['request_id']) }}">
-          <input type="hidden" name="action" value="rejected" />
-          <button type="submit">Reject</button>
-        </form>
+      <div class="card row" style="justify-content:space-between;margin-top:8px;">
+        <div>
+          <strong>{{ req["requester_name"] }}</strong> requested download for
+          <strong>{{ req["project_title"] }}</strong> (version #{{ req["version_id"] }})
+        </div>
+        <div class="row">
+          <form method="post" action="{{ url_for('projects.decide_download_request', request_id=req['request_id']) }}">
+            <input type="hidden" name="action" value="approved" />
+            <button type="submit" class="btn btn-sm btn-teal">Approve</button>
+          </form>
+          <form method="post" action="{{ url_for('projects.decide_download_request', request_id=req['request_id']) }}">
+            <input type="hidden" name="action" value="rejected" />
+            <button type="submit" class="btn btn-sm btn-danger">Reject</button>
+          </form>
+        </div>
       </div>
     {% endfor %}
   {% else %}
@@ -120,14 +255,17 @@
 </section>
 
 <section>
-  <h3>My Download Requests</h3>
+  <h4>My Download Requests</h4>
   {% if my_download_requests %}
     {% for req in my_download_requests %}
-      <div class="card">
-        <p>{{ req["project_title"] }} (version #{{ req["version_id"] }}) - status: <strong>{{ req["status"] }}</strong></p>
-        {% if req["status"] == "approved" %}
-          <a href="{{ url_for('projects.download_version', version_id=req['version_id']) }}">Download now</a>
-        {% endif %}
+      <div class="card row" style="justify-content:space-between;margin-top:8px;">
+        <span>{{ req["project_title"] }} — v#{{ req["version_id"] }}</span>
+        <div class="row">
+          <span class="pill pill-muted">{{ req["status"] }}</span>
+          {% if req["status"] == "approved" %}
+            <a href="{{ url_for('projects.download_version', version_id=req['version_id']) }}" class="btn btn-sm btn-teal">Download</a>
+          {% endif %}
+        </div>
       </div>
     {% endfor %}
   {% else %}
@@ -136,17 +274,63 @@
 </section>
 
 <section>
-  <h3>Projects</h3>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+    <h4>All Projects</h4>
+    <a href="{{ url_for('social.project_feed') }}" class="btn btn-sm">Discover Feed</a>
+  </div>
   {% if projects %}
     {% for p in projects %}
-      <div class="card">
-        <strong>{{ p["title"] }}</strong> by {{ p["owner_name"] }}
-        <p>{{ p["description"] or '' }}</p>
-        <a href="{{ url_for('projects.project_detail', project_id=p['id']) }}">Open Project</a>
+      <div class="card" style="margin-top:8px;">
+        <div class="row" style="justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <div>
+            <strong>{{ p["title"] }}</strong>
+            <span style="color:var(--muted);font-size:13px;"> by {{ p["owner_name"] }}</span>
+            {% if p["genre"] %}<span class="pill pill-amber" style="margin-left:6px;">{{ p["genre"] }}</span>{% endif %}
+            {% if p["collab_open"] %}<span class="pill pill-teal" style="margin-left:4px;">Collab Open</span>{% endif %}
+          </div>
+          <a href="{{ url_for('projects.project_detail', project_id=p['id']) }}" class="btn btn-sm">Open</a>
+        </div>
+        {% if p["description"] %}<p style="margin-top:6px;">{{ p["description"] }}</p>{% endif %}
       </div>
     {% endfor %}
   {% else %}
     <p>No projects yet.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h4>Friends Activity Feed (Last 7 Days)</h4>
+  {% if recent_feed %}
+    {% for post in recent_feed %}
+      <div class="card" style="margin-top:8px;">
+        <div class="row" style="justify-content:space-between;">
+          <div>
+            <strong>{{ post["uploader_name"] or "Unknown" }}</strong>
+            <span style="color:var(--muted);font-size:13px;"> posted v{{ post["version_number"] }} in {{ post["project_title"] }}</span>
+            {% if post["notes"] %}<span style="font-size:12px;color:var(--muted);"> — {{ post["notes"] }}</span>{% endif %}
+          </div>
+          <span style="font-size:11px;color:var(--muted);">{{ post["created_at"][:10] }}</span>
+        </div>
+        {% if post["file_path"] %}
+          <audio controls preload="metadata" style="margin-top:8px;width:100%;height:32px;">
+            <source src="{{ url_for('projects.uploaded_file', filename=post['file_path']) }}">
+          </audio>
+        {% endif %}
+        <div class="row" style="margin-top:8px;flex-wrap:wrap;">
+          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='like') }}">
+            <button type="submit" class="btn btn-sm">Like</button>
+          </form>
+          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='collaborate') }}">
+            <button type="submit" class="btn btn-sm">Collaborate</button>
+          </form>
+          <form method="post" action="{{ url_for('social.feed_action', version_id=post['id'], action='bid') }}">
+            <button type="submit" class="btn btn-sm">Bid</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No recent posts from friends.</p>
   {% endif %}
 </section>
 {% endblock %}

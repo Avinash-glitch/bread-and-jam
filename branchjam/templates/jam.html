@@ -1,0 +1,325 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="{{ url_for('projects.project_detail', project_id=project['id']) }}" class="btn btn-sm">&#8592; Back to {{ project['title'] }}</a></p>
+<h2 style="margin:12px 0 4px;">Live Jam — {{ project['title'] }}</h2>
+<p style="color:var(--muted);margin-bottom:12px;">{{ "%.0f"|format(project['bpm'] or 120) }} BPM &middot; {{ project['time_signature'] or '4/4' }}</p>
+
+{% if peer_count is defined and peer_count >= 4 %}
+  <div class="flash" style="margin-bottom:12px;">Warning: {{ peer_count }} participants in room. Performance may degrade above 4 peers.</div>
+{% endif %}
+
+<div class="card" id="jam-status-card" style="margin-bottom:12px;">
+  <strong id="status-text">Not connected — click Join to start</strong>
+</div>
+
+{# Listener mode panel #}
+<div id="listener-panel" style="display:none;">
+  <div class="card" style="border-color:var(--teal);margin-bottom:12px;">
+    <p style="color:var(--teal);margin-bottom:8px;">You are listening in (read-only mode).</p>
+    <button class="btn btn-sm btn-teal" onclick="requestToJoin()">Request to Join as Peer</button>
+  </div>
+</div>
+
+{# Host: pending join requests #}
+<div id="host-requests-panel" style="display:none;margin-bottom:12px;">
+  <h4 style="margin-bottom:8px;">Join Requests</h4>
+  <div id="join-requests-list"></div>
+</div>
+
+<div style="display:flex;gap:10px;margin:12px 0;flex-wrap:wrap;">
+  <button id="btn-join" class="btn btn-primary" onclick="joinJam()">Join Jam</button>
+  <button id="btn-leave" class="btn btn-danger" onclick="leaveJam()" style="display:none;">Leave Jam</button>
+</div>
+
+<section>
+  <h4 style="margin-bottom:8px;">Peers in room</h4>
+  <div id="peers-list" style="display:flex;flex-direction:column;gap:8px;">
+    <p style="color:var(--muted)" id="no-peers-msg">No one else here yet.</p>
+  </div>
+</section>
+
+<!-- Hidden audio elements for remote streams are created dynamically in JS -->
+
+<script>
+/*
+ * WEBRTC LIVE JAM — CLIENT SIDE
+ */
+
+const PROJECT_ID = {{ project['id'] }};
+const MY_USERNAME = {{ username | tojson }};
+
+// Check URL params for listener mode
+const urlParams = new URLSearchParams(window.location.search);
+const LISTENER_MODE = urlParams.get("mode") === "listener";
+
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ],
+};
+
+let localStream = null;
+let inJam = false;
+let isListener = false;
+const peers = {};
+
+const socket = io();
+
+// ── Auto-enter listener mode if flag set ──────────────────────────────────────
+if (LISTENER_MODE) {
+  document.addEventListener("DOMContentLoaded", function () {
+    document.getElementById("btn-join").style.display = "none";
+    document.getElementById("listener-panel").style.display = "block";
+    isListener = true;
+    setStatus("Listening in…");
+    socket.emit("join_as_listener", { project_id: PROJECT_ID, username: MY_USERNAME });
+  });
+}
+
+// ── Join / Leave ──────────────────────────────────────────────────────────────
+
+async function joinJam() {
+  setStatus("Requesting microphone access…");
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch (err) {
+    setStatus("Microphone access denied: " + err.message);
+    return;
+  }
+  inJam = true;
+  isListener = false;
+  document.getElementById("btn-join").style.display = "none";
+  document.getElementById("btn-leave").style.display = "";
+  document.getElementById("listener-panel").style.display = "none";
+  setStatus("Joining room…");
+  socket.emit("join_jam", { project_id: PROJECT_ID, username: MY_USERNAME });
+}
+
+function leaveJam() {
+  for (const sid of Object.keys(peers)) {
+    removePeer(sid);
+  }
+  if (localStream) {
+    localStream.getTracks().forEach(function(t) { t.stop(); });
+    localStream = null;
+  }
+  inJam = false;
+  document.getElementById("btn-join").style.display = "";
+  document.getElementById("btn-leave").style.display = "none";
+  setStatus("Not connected — click Join to start");
+  document.getElementById("no-peers-msg").style.display = "";
+}
+
+function requestToJoin() {
+  socket.emit("request_to_join", { project_id: PROJECT_ID, username: MY_USERNAME });
+  setStatus("Waiting for host approval…");
+}
+
+// ── RTCPeerConnection factory ─────────────────────────────────────────────────
+
+function createPeerConnection(peerId, username) {
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+
+  if (localStream) {
+    localStream.getTracks().forEach(function(track) {
+      pc.addTrack(track, localStream);
+    });
+  }
+
+  pc.onicecandidate = function(event) {
+    if (event.candidate) {
+      socket.emit("ice_candidate", {
+        to: peerId,
+        candidate: event.candidate.toJSON(),
+      });
+    }
+  };
+
+  pc.onconnectionstatechange = function() {
+    updatePeerStatus(peerId, pc.connectionState);
+    if (pc.connectionState === "connected") {
+      setStatus("Jamming with " + Object.keys(peers).length + " peer(s)");
+    }
+  };
+
+  pc.ontrack = function(event) {
+    let audioEl = peers[peerId] && peers[peerId].audioEl;
+    if (!audioEl) {
+      audioEl = document.createElement("audio");
+      audioEl.autoplay = true;
+      document.body.appendChild(audioEl);
+      if (peers[peerId]) peers[peerId].audioEl = audioEl;
+    }
+    audioEl.srcObject = event.streams[0];
+  };
+
+  peers[peerId] = { pc: pc, audioEl: null, username: username };
+  addPeerToUI(peerId, username);
+
+  return pc;
+}
+
+// ── Offer / Answer flow ───────────────────────────────────────────────────────
+
+async function initiateOffer(peerId, username) {
+  const pc = createPeerConnection(peerId, username);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  socket.emit("offer", { to: peerId, sdp: pc.localDescription });
+}
+
+// ── Server → Client events ────────────────────────────────────────────────────
+
+socket.on("peers_in_room", function(data) {
+  const existingPeers = data.peers;
+  setStatus("In room. " + Object.keys(existingPeers).length + " peer(s) already here.");
+  document.getElementById("no-peers-msg").style.display =
+    Object.keys(existingPeers).length === 0 ? "" : "none";
+  for (const sid in existingPeers) {
+    initiateOffer(sid, existingPeers[sid]);
+  }
+});
+
+socket.on("room_state", function(data) {
+  // Listener received room state
+  const existingPeers = data.peers || {};
+  setStatus("Listening. " + Object.keys(existingPeers).length + " peer(s) in room.");
+});
+
+socket.on("peer_joined", function(data) {
+  document.getElementById("no-peers-msg").style.display = "none";
+  setStatus(escapeHtml(data.username) + " joined the room");
+});
+
+socket.on("join_request", function(data) {
+  // We are the host receiving a join request
+  const panel = document.getElementById("host-requests-panel");
+  const list = document.getElementById("join-requests-list");
+  panel.style.display = "block";
+
+  const el = document.createElement("div");
+  el.className = "card row";
+  el.style.justifyContent = "space-between";
+  el.style.marginBottom = "6px";
+  el.innerHTML =
+    '<span>' + escapeHtml(data.username) + ' wants to join</span>' +
+    '<div style="display:flex;gap:6px;">' +
+    '<button class="btn btn-sm btn-teal" onclick="approveJoin(\'' + data.requester_sid + '\', this.closest(\'.card\'))">Approve</button>' +
+    '<button class="btn btn-sm btn-danger" onclick="denyJoin(\'' + data.requester_sid + '\', this.closest(\'.card\'))">Deny</button>' +
+    '</div>';
+  list.appendChild(el);
+});
+
+function approveJoin(requesterSid, elToRemove) {
+  socket.emit("approve_join", { requester_sid: requesterSid });
+  if (elToRemove) elToRemove.remove();
+}
+
+function denyJoin(requesterSid, elToRemove) {
+  socket.emit("deny_join", { requester_sid: requesterSid });
+  if (elToRemove) elToRemove.remove();
+}
+
+socket.on("join_denied", function(data) {
+  setStatus("Join request denied: " + (data.reason || "no reason given"));
+});
+
+socket.on("offer", async function(data) {
+  if (!inJam || !localStream) return;
+  let entry = peers[data.from];
+  let pc;
+  if (entry) {
+    pc = entry.pc;
+  } else {
+    pc = createPeerConnection(data.from, "Peer");
+  }
+  await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  socket.emit("answer", { to: data.from, sdp: pc.localDescription });
+});
+
+socket.on("answer", async function(data) {
+  const entry = peers[data.from];
+  if (!entry) return;
+  await entry.pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+});
+
+socket.on("ice_candidate", async function(data) {
+  const entry = peers[data.from];
+  if (!entry || !data.candidate) return;
+  try {
+    await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+  } catch (e) {
+    console.warn("Failed to add ICE candidate:", e);
+  }
+});
+
+socket.on("peer_left", function(data) {
+  removePeer(data.peer_id);
+  setStatus((data.username || "A peer") + " left the room");
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function removePeer(peerId) {
+  const entry = peers[peerId];
+  if (!entry) return;
+  entry.pc.close();
+  if (entry.audioEl) {
+    entry.audioEl.srcObject = null;
+    entry.audioEl.remove();
+  }
+  delete peers[peerId];
+  removePeerFromUI(peerId);
+  if (Object.keys(peers).length === 0) {
+    document.getElementById("no-peers-msg").style.display = "";
+  }
+}
+
+function setStatus(msg) {
+  document.getElementById("status-text").textContent = msg;
+}
+
+function addPeerToUI(peerId, username) {
+  const list = document.getElementById("peers-list");
+  const el = document.createElement("div");
+  el.className = "card";
+  el.id = "peer-" + peerId;
+  el.innerHTML =
+    '<strong>' + escapeHtml(username) + '</strong>' +
+    '<span id="peer-state-' + peerId + '" style="margin-left:10px;color:var(--muted);font-size:13px;">connecting…</span>';
+  list.appendChild(el);
+}
+
+function removePeerFromUI(peerId) {
+  const el = document.getElementById("peer-" + peerId);
+  if (el) el.remove();
+}
+
+function updatePeerStatus(peerId, state) {
+  const el = document.getElementById("peer-state-" + peerId);
+  if (!el) return;
+  const colors = {
+    connected: "var(--success)",
+    connecting: "var(--muted)",
+    disconnected: "var(--danger)",
+    failed: "var(--danger)",
+    closed: "var(--danger)",
+  };
+  el.style.color = colors[state] || "var(--muted)";
+  el.textContent = state;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, function(c) {
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  });
+}
+
+window.addEventListener("beforeunload", function() {
+  if (inJam) leaveJam();
+});
+</script>
+{% endblock %}

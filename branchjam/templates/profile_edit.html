@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="max-width:560px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:8px;">
+    <h2>Edit Profile</h2>
+    <a href="{{ url_for('auth.view_profile', user_id=session['user_id']) }}" class="btn btn-sm">Cancel</a>
+  </div>
+
+  <form method="post" action="{{ url_for('auth.edit_profile') }}" enctype="multipart/form-data">
+    <div class="card" style="display:flex;flex-direction:column;gap:16px;">
+
+      {# Avatar #}
+      <div class="form-group">
+        <label>Profile Picture (JPG, JPEG, PNG, WEBP)</label>
+        <div style="display:flex;align-items:center;gap:16px;margin-top:6px;">
+          {% if user and user["profile_picture"] %}
+            <img src="{{ url_for('projects.uploaded_file', filename=user['profile_picture']) }}"
+                 id="avatar-preview"
+                 alt="Avatar"
+                 style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--border);" />
+          {% else %}
+            <img id="avatar-preview" alt="Avatar" style="display:none;width:72px;height:72px;border-radius:50%;object-fit:cover;border:2px solid var(--border);" />
+          {% endif %}
+          <div style="flex:1;">
+            <input type="file" name="profile_picture" id="avatar-input" accept="image/jpeg,image/png,image/webp" />
+          </div>
+        </div>
+      </div>
+
+      {# Bio #}
+      <div class="form-group">
+        <label>Bio</label>
+        <textarea name="bio" placeholder="Tell the world about yourself...">{{ (user and user["bio"]) or "" }}</textarea>
+      </div>
+
+      {# Genres #}
+      <div class="form-group">
+        <label>Genres (comma-separated)</label>
+        <input name="genres" placeholder="Hip-Hop, Jazz, Lo-fi"
+               value="{{ (user and user['genres'] and (user['genres'] | from_json | join(', '))) or '' }}" />
+        <p style="margin-top:4px;font-size:11px;">e.g. Hip-Hop, Jazz, Lo-fi</p>
+      </div>
+
+      {# Instruments #}
+      <div class="form-group">
+        <label>Instruments (comma-separated)</label>
+        <input name="instruments" placeholder="Guitar, Piano, Drums"
+               value="{{ (user and user['instruments'] and (user['instruments'] | from_json | join(', '))) or '' }}" />
+        <p style="margin-top:4px;font-size:11px;">e.g. Guitar, Piano, Drums</p>
+      </div>
+
+      <button type="submit" class="btn-primary btn">Save Changes</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

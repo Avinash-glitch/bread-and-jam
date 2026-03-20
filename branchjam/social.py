@@ -1,9 +1,10 @@
+import sqlite3
 from datetime import datetime, timedelta
 
-from flask import Blueprint, flash, redirect, render_template, request, session, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 
 from .db import get_db
-from .utils import current_user, login_required, now_iso
+from .utils import current_user, insert_notification, login_required, now_iso, popularity_score
 
 
 bp = Blueprint("social", __name__)
@@ -21,6 +22,7 @@ def root():
 def dashboard():
     user = current_user()
     db = get_db()
+    role = user["role"] or "creator"
 
     incoming = db.execute(
         """
@@ -116,6 +118,113 @@ def dashboard():
         (user["id"],),
     ).fetchall()
 
+    # Role-specific data
+    creator_stats = {}
+    producer_stats = {}
+    collab_requests_for_me = []
+    my_transactions = []
+    following_list = []
+
+    if role == "creator":
+        samples_released = db.execute(
+            "SELECT COUNT(*) AS cnt FROM projects WHERE owner_id = ?", (user["id"],)
+        ).fetchone()["cnt"]
+
+        collabs_given = db.execute(
+            """
+            SELECT COUNT(DISTINCT b.project_id) AS cnt
+            FROM versions v
+            JOIN branches b ON b.id = v.branch_id
+            WHERE v.uploaded_by_user_id = ? AND b.project_id NOT IN (
+                SELECT id FROM projects WHERE owner_id = ?
+            )
+            """,
+            (user["id"], user["id"]),
+        ).fetchone()["cnt"]
+
+        money_row = db.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE payee_id = ?",
+            (user["id"],),
+        ).fetchone()
+        money_earned = money_row["total"] if money_row else 0.0
+
+        follower_count = (user["followers_count"] or 0) if user["followers_count"] is not None else 0
+
+        creator_stats = {
+            "samples_released": samples_released,
+            "collabs_given": collabs_given,
+            "money_earned": money_earned,
+            "follower_count": follower_count,
+        }
+
+        # Pending collab requests for this creator's projects
+        collab_requests_for_me = db.execute(
+            """
+            SELECT cr.*, u.username AS requester_name, p.title AS project_title
+            FROM collab_requests cr
+            JOIN users u ON u.id = cr.requester_id
+            JOIN projects p ON p.id = cr.project_id
+            WHERE p.owner_id = ? AND cr.status = 'pending'
+            ORDER BY cr.created_at DESC
+            """,
+            (user["id"],),
+        ).fetchall()
+
+        my_transactions = db.execute(
+            """
+            SELECT t.*, u.username AS payer_name
+            FROM transactions t
+            JOIN users u ON u.id = t.payer_id
+            WHERE t.payee_id = ?
+            ORDER BY t.created_at DESC
+            LIMIT 20
+            """,
+            (user["id"],),
+        ).fetchall()
+
+    else:
+        samples_bought = db.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM transactions WHERE payer_id = ?
+            """,
+            (user["id"],),
+        ).fetchone()["cnt"]
+
+        money_spent_row = db.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE payer_id = ?",
+            (user["id"],),
+        ).fetchone()
+        money_spent = money_spent_row["total"] if money_spent_row else 0.0
+
+        following_list = db.execute(
+            """
+            SELECT u.id, u.username, u.profile_picture
+            FROM follows f
+            JOIN users u ON u.id = f.followee_id
+            WHERE f.follower_id = ?
+            ORDER BY u.username
+            """,
+            (user["id"],),
+        ).fetchall()
+
+        producer_stats = {
+            "samples_bought": samples_bought,
+            "money_spent": money_spent,
+            "following_count": len(following_list),
+        }
+
+        my_transactions = db.execute(
+            """
+            SELECT t.*, u.username AS payee_name
+            FROM transactions t
+            JOIN users u ON u.id = t.payee_id
+            WHERE t.payer_id = ?
+            ORDER BY t.created_at DESC
+            LIMIT 20
+            """,
+            (user["id"],),
+        ).fetchall()
+
     return render_template(
         "dashboard.html",
         title="Dashboard",
@@ -126,6 +235,11 @@ def dashboard():
         recent_feed=recent_feed,
         pending_consents=pending_consents,
         my_download_requests=my_download_requests,
+        creator_stats=creator_stats,
+        producer_stats=producer_stats,
+        collab_requests_for_me=collab_requests_for_me,
+        my_transactions=my_transactions,
+        following_list=following_list,
     )
 
 
@@ -234,3 +348,198 @@ def feed_action(version_id, action):
         return redirect(url_for("social.dashboard"))
     flash(f"{action.title()} recorded for version #{version_id}.")
     return redirect(url_for("social.dashboard"))
+
+
+@bp.route("/feed")
+@login_required
+def project_feed():
+    db = get_db()
+    cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat(timespec="seconds")
+
+    rows = db.execute(
+        """
+        SELECT
+          p.*,
+          u.username AS owner_name,
+          u.id AS owner_id,
+          COALESCE(p.listens, 0) AS listens,
+          COALESCE(p.asking_price, 0) AS asking_price,
+          COALESCE(p.collab_open, 0) AS collab_open,
+          (
+            SELECT COUNT(*) FROM transactions t
+            JOIN offers o ON o.id = t.offer_id
+            JOIN posts po ON po.id = o.post_id
+            WHERE po.project_id = p.id
+          ) AS purchases,
+          (
+            SELECT v2.file_path
+            FROM versions v2
+            JOIN branches b2 ON b2.id = v2.branch_id
+            WHERE b2.project_id = p.id AND v2.file_path IS NOT NULL
+            ORDER BY v2.created_at DESC
+            LIMIT 1
+          ) AS latest_file,
+          (
+            SELECT v3.waveform_svg
+            FROM versions v3
+            JOIN branches b3 ON b3.id = v3.branch_id
+            WHERE b3.project_id = p.id AND v3.waveform_svg IS NOT NULL
+            ORDER BY v3.created_at DESC
+            LIMIT 1
+          ) AS latest_waveform
+        FROM projects p
+        JOIN users u ON u.id = p.owner_id
+        WHERE p.created_at >= ?
+        ORDER BY p.created_at DESC
+        LIMIT 60
+        """,
+        (cutoff,),
+    ).fetchall()
+
+    projects_with_score = sorted(
+        rows,
+        key=lambda r: popularity_score(r["listens"], r["purchases"]),
+        reverse=True,
+    )
+
+    return render_template(
+        "feed.html",
+        title="Discover",
+        projects=projects_with_score,
+    )
+
+
+# ── Follow / Unfollow ─────────────────────────────────────────────────────────
+
+@bp.route("/follow/<int:user_id>", methods=["POST"])
+@login_required
+def follow_user(user_id):
+    if user_id == session["user_id"]:
+        return jsonify({"ok": False, "error": "Cannot follow yourself"}), 400
+    db = get_db()
+    try:
+        db.execute(
+            "INSERT INTO follows (follower_id, followee_id, created_at) VALUES (?, ?, ?)",
+            (session["user_id"], user_id, now_iso()),
+        )
+        db.execute(
+            "UPDATE users SET followers_count = COALESCE(followers_count, 0) + 1 WHERE id = ?",
+            (user_id,),
+        )
+        db.commit()
+        insert_notification(db, user_id, "follow", {"follower_id": session["user_id"]})
+        db.commit()
+    except sqlite3.IntegrityError:
+        pass  # already following
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"ok": True})
+    return redirect(request.referrer or url_for("social.dashboard"))
+
+
+@bp.route("/unfollow/<int:user_id>", methods=["POST"])
+@login_required
+def unfollow_user(user_id):
+    db = get_db()
+    db.execute(
+        "DELETE FROM follows WHERE follower_id = ? AND followee_id = ?",
+        (session["user_id"], user_id),
+    )
+    db.execute(
+        "UPDATE users SET followers_count = MAX(0, COALESCE(followers_count, 0) - 1) WHERE id = ?",
+        (user_id,),
+    )
+    db.commit()
+    if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"ok": True})
+    return redirect(request.referrer or url_for("social.dashboard"))
+
+
+@bp.route("/followers")
+@login_required
+def followers_page():
+    db = get_db()
+    followers = db.execute(
+        """
+        SELECT u.id, u.username, u.profile_picture
+        FROM follows f
+        JOIN users u ON u.id = f.follower_id
+        WHERE f.followee_id = ?
+        ORDER BY f.created_at DESC
+        """,
+        (session["user_id"],),
+    ).fetchall()
+    return render_template("followers.html", title="My Followers", followers=followers)
+
+
+@bp.route("/following")
+@login_required
+def following_page():
+    db = get_db()
+    following = db.execute(
+        """
+        SELECT u.id, u.username, u.profile_picture
+        FROM follows f
+        JOIN users u ON u.id = f.followee_id
+        WHERE f.follower_id = ?
+        ORDER BY f.created_at DESC
+        """,
+        (session["user_id"],),
+    ).fetchall()
+    return render_template("following.html", title="Following", following=following)
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+@bp.route("/notifications")
+@login_required
+def notifications_json():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT id, type, payload, read, created_at
+        FROM notifications
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 20
+        """,
+        (session["user_id"],),
+    ).fetchall()
+    result = []
+    for row in rows:
+        result.append({
+            "id": row["id"],
+            "type": row["type"],
+            "payload": row["payload"],
+            "read": bool(row["read"]),
+            "created_at": row["created_at"],
+        })
+    return jsonify(result)
+
+
+@bp.route("/notifications/all")
+@login_required
+def notifications_page():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT id, type, payload, read, created_at
+        FROM notifications
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 100
+        """,
+        (session["user_id"],),
+    ).fetchall()
+    return render_template("notifications.html", title="Notifications", notifications=rows)
+
+
+@bp.route("/notifications/<int:notif_id>/read", methods=["POST"])
+@login_required
+def mark_notification_read(notif_id):
+    db = get_db()
+    db.execute(
+        "UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?",
+        (notif_id, session["user_id"]),
+    )
+    db.commit()
+    return jsonify({"ok": True})

@@ -31,6 +31,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'creator' CHECK(role IN ('creator', 'producer')),
             created_at TEXT NOT NULL
         );
 
@@ -128,14 +129,131 @@ def init_db():
             FOREIGN KEY(project_id) REFERENCES projects(id),
             FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
         );
+
+        CREATE TABLE IF NOT EXISTS posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            creator_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL CHECK(status IN ('open', 'closed')),
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(project_id) REFERENCES projects(id),
+            FOREIGN KEY(creator_id) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS post_tracks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL,
+            version_id INTEGER NOT NULL,
+            price REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(post_id) REFERENCES posts(id),
+            FOREIGN KEY(version_id) REFERENCES versions(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS offers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL,
+            producer_id INTEGER NOT NULL,
+            total_amount REAL NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'accepted', 'rejected', 'countered', 'expired')),
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(post_id) REFERENCES posts(id),
+            FOREIGN KEY(producer_id) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS offer_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            offer_id INTEGER NOT NULL,
+            post_track_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(offer_id) REFERENCES offers(id),
+            FOREIGN KEY(post_track_id) REFERENCES post_tracks(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS offer_responses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            offer_id INTEGER NOT NULL,
+            contributor_id INTEGER NOT NULL,
+            decision TEXT NOT NULL CHECK(decision IN ('pending', 'accepted', 'rejected', 'countered')),
+            counter_amount REAL,
+            decided_at TEXT,
+            UNIQUE(offer_id, contributor_id),
+            FOREIGN KEY(offer_id) REFERENCES offers(id),
+            FOREIGN KEY(contributor_id) REFERENCES users(id)
+        );
         """
     )
 
     # Lightweight migration path for existing local DB files.
+    _ensure_column(db, "users", "role", "TEXT")
     _ensure_column(db, "projects", "bpm", "REAL")
     _ensure_column(db, "projects", "time_signature", "TEXT")
     _ensure_column(db, "projects", "bars", "INTEGER")
     _ensure_column(db, "versions", "uploaded_by_user_id", "INTEGER")
     _ensure_column(db, "versions", "detected_bpm", "REAL")
     _ensure_column(db, "versions", "waveform_svg", "TEXT")
+
+    # New user profile columns
+    _ensure_column(db, "users", "profile_picture", "TEXT")
+    _ensure_column(db, "users", "bio", "TEXT")
+    _ensure_column(db, "users", "genres", "TEXT")
+    _ensure_column(db, "users", "instruments", "TEXT")
+    _ensure_column(db, "users", "followers_count", "INTEGER DEFAULT 0")
+
+    # New project columns
+    _ensure_column(db, "projects", "genre", "TEXT")
+    _ensure_column(db, "projects", "asking_price", "REAL DEFAULT 0")
+    _ensure_column(db, "projects", "collab_open", "INTEGER DEFAULT 0")
+    _ensure_column(db, "projects", "max_collaborators", "INTEGER DEFAULT 4")
+    _ensure_column(db, "projects", "listens", "INTEGER DEFAULT 0")
+
+    # New tables for social, collab, notifications, transactions
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS follows (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          follower_id INTEGER NOT NULL REFERENCES users(id),
+          followee_id INTEGER NOT NULL REFERENCES users(id),
+          created_at TEXT NOT NULL,
+          UNIQUE(follower_id, followee_id)
+        );
+        CREATE TABLE IF NOT EXISTS collaborator_splits (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          offer_id INTEGER NOT NULL REFERENCES offers(id),
+          contributor_id INTEGER NOT NULL REFERENCES users(id),
+          split_amount REAL NOT NULL,
+          accepted INTEGER DEFAULT 0,
+          decided_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id),
+          type TEXT NOT NULL,
+          payload TEXT,
+          read INTEGER DEFAULT 0,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS collab_requests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          requester_id INTEGER NOT NULL REFERENCES users(id),
+          project_id INTEGER NOT NULL REFERENCES projects(id),
+          message TEXT,
+          status TEXT DEFAULT 'pending',
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS transactions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          offer_id INTEGER NOT NULL REFERENCES offers(id),
+          payer_id INTEGER NOT NULL REFERENCES users(id),
+          payee_id INTEGER NOT NULL REFERENCES users(id),
+          amount REAL NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        """
+    )
+
     db.commit()

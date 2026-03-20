@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap;margin-bottom:24px;">
+  {# Avatar #}
+  <div style="flex-shrink:0;">
+    {% if profile_user["profile_picture"] %}
+      <img src="{{ url_for('projects.uploaded_file', filename=profile_user['profile_picture']) }}"
+           alt="{{ profile_user['username'] }}"
+           style="width:96px;height:96px;border-radius:50%;object-fit:cover;border:2px solid var(--border);" />
+    {% else %}
+      <div style="width:96px;height:96px;border-radius:50%;background:var(--surface);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:'Bebas Neue',sans-serif;font-size:40px;color:var(--amber);">
+        {{ profile_user["username"][:1].upper() }}
+      </div>
+    {% endif %}
+  </div>
+
+  {# Info #}
+  <div style="flex:1;min-width:200px;">
+    <h2 style="margin-bottom:4px;">{{ profile_user["username"] }}</h2>
+    <span class="pill pill-muted">{{ profile_user["role"] | title }}</span>
+
+    {% if profile_user["bio"] %}
+      <p style="margin-top:10px;">{{ profile_user["bio"] }}</p>
+    {% endif %}
+
+    {# Genre pills #}
+    {% if profile_user["genres"] %}
+      <div class="row" style="margin-top:10px;flex-wrap:wrap;gap:6px;">
+        {% for g in profile_user["genres"] | from_json %}
+          <span class="pill pill-amber">{{ g }}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {# Instruments #}
+    {% if profile_user["instruments"] %}
+      <div class="row" style="margin-top:8px;flex-wrap:wrap;gap:6px;">
+        {% for i in profile_user["instruments"] | from_json %}
+          <span class="pill pill-teal">{{ i }}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {# Follow / edit button #}
+    <div class="row" style="margin-top:14px;">
+      {% if session.get("user_id") == profile_user["id"] %}
+        <a href="{{ url_for('auth.edit_profile') }}" class="btn btn-sm btn-primary">Edit Profile</a>
+      {% else %}
+        <form method="post" action="{{ url_for('social.follow_user', user_id=profile_user['id']) }}">
+          <button type="submit" class="btn btn-sm btn-teal">Follow</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# Stats #}
+<div class="stats-row" style="margin-bottom:24px;">
+  <div class="stat-card">
+    <span class="stat-value">{{ projects_count }}</span>
+    <span class="stat-label">Projects</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-value">{{ collabs_count }}</span>
+    <span class="stat-label">Collabs</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-value mono">${{ "%.2f"|format(money_earned) }}</span>
+    <span class="stat-label">Earned</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-value">{{ profile_user["followers_count"] or 0 }}</span>
+    <span class="stat-label">Followers</span>
+  </div>
+</div>
+
+{# Projects grid #}
+<h4 style="margin-bottom:10px;">Projects</h4>
+{% if projects %}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;">
+    {% for p in projects %}
+      <div class="card">
+        <strong>{{ p["title"] }}</strong>
+        {% if p["genre"] %}<span class="pill pill-amber" style="margin-left:6px;">{{ p["genre"] }}</span>{% endif %}
+        {% if p["bpm"] %}<span class="pill pill-muted" style="margin-left:4px;">{{ "%.0f"|format(p["bpm"]) }} BPM</span>{% endif %}
+        {% if p["description"] %}<p style="margin-top:6px;font-size:12px;">{{ p["description"] }}</p>{% endif %}
+        <div style="margin-top:10px;">
+          <a href="{{ url_for('projects.project_detail', project_id=p['id']) }}" class="btn btn-sm">View</a>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <p>No projects yet.</p>
+{% endif %}
+{% endblock %}

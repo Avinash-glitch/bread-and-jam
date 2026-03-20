@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 style="margin-bottom:20px;">Following</h2>
+{% if following %}
+  <div style="display:flex;flex-direction:column;gap:8px;">
+    {% for u in following %}
+      <div class="card row" style="justify-content:space-between;">
+        <a href="{{ url_for('auth.view_profile', user_id=u['id']) }}" style="font-weight:500;">{{ u["username"] }}</a>
+        <form method="post" action="{{ url_for('social.unfollow_user', user_id=u['id']) }}">
+          <button type="submit" class="btn btn-sm btn-danger">Unfollow</button>
+        </form>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <p>You are not following anyone yet.</p>
+{% endif %}
+{% endblock %}

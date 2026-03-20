@@ -9,3 +9,6 @@ uploads/
 venv/
 .env.*
 .DS_Store
+.vscode/
+.unotes/
+static/uploads/
